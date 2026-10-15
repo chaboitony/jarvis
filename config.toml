@@ -12,17 +12,31 @@ think = false
 keep_alive = "30m"     # keep the model in VRAM this long after the last request
 max_tool_rounds = 5    # tool calls allowed per request before giving up
 keep_turns = 6         # past requests remembered (keeps the context window small)
+# Routing: with many tools, only the plugins that match a request are offered to
+# the model, chosen by the small embedding model. Type "route <request>" in
+# typed mode to see the choice. Set routing = false to always offer every tool.
+routing = true
+routing_plugins = 3    # how many plugins to offer per request
+embed_model = "nomic-embed-text"
 
 [voice]
 whisper_model = "small.en"
 voice_file = "voices/en_GB-alan-medium.onnx"   # relative to ~/rima/jarvis
 announce_startup = true   # say "J.A.R.V.I.S. online" when voice mode starts (at every login)
 
+[notifications]
+seconds = 15            # how long a reply stays on screen
+text_size = "large"     # small, medium, large, x-large or xx-large
+
+[history]
+keep_days = 30          # conversations are deleted after this many days
+                        # (saved in ~/.local/state/jarvis/history; view with jarvis-history)
+
 [tools]
 # Plugin files in tools/ to load, by file name without ".py".
-# Keep the total number of tools around 10-12; small models choose less
-# accurately from long lists.
-enabled = ["tasks", "weather"]
+# Routing ([brain] above) keeps the list the model sees short, so many plugins
+# are fine. The order here is also the order of the welcome briefing sections.
+enabled = ["weather", "tasks", "timers", "desktop", "calc", "system", "briefing"]
 
 # Settings for one plugin go in a [tools.<file name>] section.
 
@@ -31,3 +45,21 @@ place = "Manhattan, Kansas"   # what J.A.R.V.I.S. calls home
 latitude = 39.18361
 longitude = -96.57167
 alerts = true                 # check National Weather Service alerts (U.S. only)
+
+[tools.desktop]
+volume_step = 10              # percent per "turn it up" / "turn it down"
+
+# Apps J.A.R.V.I.S. may open: the name you say = the command that starts it.
+# Only these can be opened. Add or remove lines freely; names are lowercase.
+[tools.desktop.apps]
+firefox = "firefox"
+chrome = "google-chrome-stable"
+terminal = "konsole"
+files = "dolphin"
+obsidian = "obsidian"
+spotify = "spotify-launcher"
+discord = "discord"
+geany = "geany"
+libreoffice = "libreoffice"
+filelight = "filelight"
+"sound settings" = "pavucontrol"

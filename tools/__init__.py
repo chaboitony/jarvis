@@ -12,8 +12,15 @@ A plugin file can contain:
 
     PROMPT = "Extra instructions for the model about these tools."   # optional
 
+    EXAMPLES = ["will it rain tomorrow", "do I need a jacket"]  # optional; sample
+                                    # requests that help routing pick this plugin
+
     def setup(settings):            # optional; gets the [tools.<file name>] table
         ...                         # from config.toml. Raise ValueError to refuse to load.
+
+    def briefing():                 # optional; a sentence or two for the welcome
+        return "Tasks: 2 due today."  # briefing (tools/briefing.py collects these).
+                                    # Not a tool itself, so no @tool.
 
     @tool                           # marks a function as something the AI may call
     def get_weather(day: str = "today") -> str:
@@ -33,6 +40,10 @@ A plugin file can contain:
     @tool(schema={...})     give the JSON schema by hand instead of building it
                             from the function's signature and docstring.
 
+Routing: with many plugins loaded, only the few that match a request are offered
+to the model (see Toolbox.select). Each plugin is described for routing by its
+name, PROMPT, tool descriptions and EXAMPLES, so good EXAMPLES matter.
+
 Rules for tool functions:
   * Return plain text (or something that turns into text).
   * Raise ValueError with a plain sentence when something is wrong; the model
@@ -41,6 +52,7 @@ Rules for tool functions:
 """
 import importlib
 import inspect
+import math
 import pkgutil
 import re
 import subprocess
@@ -49,6 +61,10 @@ import traceback
 import typing
 
 MAX_RESULT_CHARS = 4000  # keeps one tool result from filling the model's context window
+
+# The plugin modules currently loaded, in config.toml order: name -> module.
+# Plugins that combine others (like briefing) read this.
+LOADED = {}
 
 _JSON_TYPES = {str: "string", int: "integer", float: "number", bool: "boolean",
                list: "array", dict: "object"}
@@ -145,13 +161,23 @@ def build_schema(func):
     }
 
 
+def _cosine(a, b):
+    """How alike two embeddings are: 1 = same direction, 0 = unrelated."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))
+    return dot / norm if norm else 0.0
+
+
 # --------------------------------------------------------------------------
 # The toolbox
 # --------------------------------------------------------------------------
 class Toolbox:
     def __init__(self):
         self.entries = {}     # tool name -> {"func", "schema", "writes", "untrusted", "plugin"}
-        self.prompts = []     # PROMPT text from each loaded plugin
+        self.prompts = {}     # plugin name -> its PROMPT text
+        self.modules = {}     # plugin name -> module
+        self.route_error = None
+        self._doc_vectors = None  # plugin name -> embedding, built on first routed request
         self.loaded = []      # plugin names that loaded
         self.available = []   # every plugin file in the folder
         self.problems = []    # plugins that failed, and why
@@ -166,7 +192,8 @@ class Toolbox:
         tools_cfg = config.get("tools", {})
         enabled = tools_cfg.get("enabled", [])
         available = sorted(m.name for m in pkgutil.iter_modules(__path__) if not m.name.startswith("_"))
-        entries, prompts, loaded, problems = {}, [], [], []
+        entries, prompts, loaded, problems = {}, {}, [], []
+        modules = {}
 
         for plugin in enabled:
             if plugin not in available:
@@ -187,12 +214,17 @@ class Toolbox:
                 continue
             entries.update(found)
             loaded.append(plugin)
+            modules[plugin] = module
             text = str(getattr(module, "PROMPT", "") or "").strip()
             if text:
-                prompts.append(text)
+                prompts[plugin] = text
 
         self.entries, self.prompts, self.loaded = entries, prompts, loaded
         self.available, self.problems = available, problems
+        self.modules = modules
+        self._doc_vectors = None  # plugins changed, so routing descriptions must be rebuilt
+        LOADED.clear()
+        LOADED.update(modules)
 
     @staticmethod
     def _import(plugin):
@@ -228,7 +260,65 @@ class Toolbox:
 
     @property
     def prompt(self):
-        return "\n\n".join(self.prompts)
+        return "\n\n".join(self.prompts.values())
+
+    def schemas_for(self, plugins):
+        """The tool descriptions for only these plugins."""
+        return [e["schema"] for e in self.entries.values() if e["plugin"] in plugins]
+
+    def prompt_for(self, plugins):
+        """The PROMPT instructions for only these plugins."""
+        return "\n\n".join(text for name, text in self.prompts.items() if name in plugins)
+
+    # ---- routing ---------------------------------------------------------
+    def describe_plugin(self, plugin):
+        """The text routing compares requests against: name, instructions, tools, examples."""
+        parts = [f"{plugin}."]
+        if plugin in self.prompts:
+            parts.append(self.prompts[plugin])
+        for entry in self.entries.values():
+            if entry["plugin"] != plugin:
+                continue
+            fn = entry["schema"]["function"]
+            parts.append(fn.get("description", ""))
+            for prop in fn.get("parameters", {}).get("properties", {}).values():
+                parts.append(prop.get("description", ""))
+        examples = getattr(self.modules.get(plugin), "EXAMPLES", None) or []
+        if examples:
+            parts.append("Examples: " + "; ".join(str(e) for e in examples))
+        return " ".join(" ".join(parts).split())
+
+    def select(self, text, embed, sticky=(), top=3):
+        """
+        Choose which plugins' tools to offer for one request, so the model picks
+        from a short list instead of every tool.
+
+        embed(list of texts) -> list of vectors (an embedding model turns text into
+        numbers so that texts with similar meaning get similar numbers). Each
+        plugin's description is embedded once; each request is embedded and
+        compared to them by cosine similarity. The best `top` plugins are chosen,
+        plus `sticky` ones (used in the last request, so follow-ups like
+        "and tomorrow?" still work).
+
+        Returns (chosen plugins in config order, {plugin: score}). If embedding
+        fails, every plugin is returned, so routing can never make tools vanish.
+        """
+        plugins = list(self.loaded)
+        if len(plugins) <= top:
+            return plugins, {}
+        try:
+            if self._doc_vectors is None:
+                docs = ["search_document: " + self.describe_plugin(p) for p in plugins]
+                self._doc_vectors = dict(zip(plugins, embed(docs)))
+            [query] = embed(["search_query: " + text])
+            self.route_error = None
+        except Exception as e:
+            self.route_error = f"{type(e).__name__}: {e}"
+            return plugins, {}
+        scores = {p: _cosine(query, vec) for p, vec in self._doc_vectors.items()}
+        chosen = set(sorted(plugins, key=scores.get, reverse=True)[:top])
+        chosen.update(p for p in sticky if p in scores)
+        return [p for p in plugins if p in chosen], scores
 
     def summary(self):
         """A short report for the screen: what loaded, what's off, what failed."""

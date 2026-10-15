@@ -13,7 +13,7 @@ Safety rules:
 import json
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from tools import tool
 
@@ -43,6 +43,11 @@ Task rules:
 - Choose the project that fits best. If none clearly fits, leave it out.
 - For dates use YYYY-MM-DD, or today, tomorrow, a weekday name, eow, eom or eoy.
 - You cannot delete tasks. If asked, say so and offer to mark the task done instead."""
+
+EXAMPLES = [
+    "what are my tasks", "add a task to order stepper motors", "mark the homework task as done",
+    "what's due this week", "move the lab report to Friday", "make that high priority", "what do I need to do today",
+]
 
 
 # --------------------------------------------------------------------------
@@ -228,3 +233,34 @@ def modify_task(task_id, due=None, priority=None, project=None):
         raise ValueError("Nothing to change. Give a new due date, priority or project.")
     _run([str(task_id), "modify", *changes])
     return f"Updated task {task_id} ({task['description']}): {' '.join(changes)}"
+
+
+def _due_date(stamp):
+    """Taskwarrior's UTC timestamp -> the local calendar date."""
+    dt = datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+    return dt.astimezone().date()
+
+
+def briefing():
+    """Overdue and due-today tasks in one sentence for the welcome briefing."""
+    tasks = json.loads(_run(["status:pending", "export"]) or "[]")
+    if not tasks:
+        return "Tasks: nothing pending."
+    today = date.today()
+    overdue = [t for t in tasks if t.get("due") and _due_date(t["due"]) < today]
+    due_today = [t for t in tasks if t.get("due") and _due_date(t["due"]) == today]
+
+    def names(group):
+        group = sorted(group, key=lambda t: t.get("urgency", 0), reverse=True)
+        shown = "; ".join(str(t.get("description", ""))[:60] for t in group[:3])
+        return shown + ("; and more" if len(group) > 3 else "")
+
+    parts = [f"Tasks: {len(tasks)} pending"]
+    if overdue:
+        parts.append(f"{len(overdue)} overdue ({names(overdue)})")
+    if due_today:
+        parts.append(f"{len(due_today)} due today ({names(due_today)})")
+    if not overdue and not due_today:
+        top = max(tasks, key=lambda t: t.get("urgency", 0))
+        parts.append(f"nothing due today; most urgent is {str(top.get('description', ''))[:60]}")
+    return ", ".join(parts) + "."

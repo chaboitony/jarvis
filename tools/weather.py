@@ -37,6 +37,11 @@ HOME = {"name": "home", "lat": None, "lon": None, "alerts": True}
 PROMPT = ""  # filled in by setup() with the home town's name
 _cache = {}  # url -> (time fetched, data)
 
+EXAMPLES = [
+    "what's the weather", "will it rain tomorrow", "do I need a jacket", "how cold is it outside",
+    "what's the forecast for the weekend", "is there a storm warning", "what's it like in Wichita",
+]
+
 # Open-Meteo reports conditions as WMO weather codes
 WEATHER_CODES = {
     0: "clear sky", 1: "mainly clear", 2: "partly cloudy", 3: "overcast",
@@ -307,3 +312,19 @@ def get_weather(day: str = "today", place: str = "") -> str:
             parts.append(timing)
         parts.append(f"Sunrise {_clock(daily['sunrise'][i])}, sunset {_clock(daily['sunset'][i])}.")
     return " ".join(parts)
+
+
+def briefing():
+    """Today's weather in one or two sentences for the welcome briefing (home only)."""
+    data = _forecast(HOME)
+    c, d = data["current"], data["daily"]
+    text = (f"Weather: {round(c['temperature_2m'])}°F and {_describe(c['weather_code'])} now; "
+            f"today's high {round(d['temperature_2m_max'][0])}°F, low {round(d['temperature_2m_min'][0])}°F, "
+            f"{round(d['precipitation_probability_max'][0] or 0)}% chance of precipitation.")
+    timing = _rain_timing(data, date.fromisoformat(d["time"][0]), after=c["time"][:13])
+    if timing:
+        text += " " + timing
+    alerts = _alerts(HOME)
+    if alerts and alerts.startswith("ACTIVE"):
+        text = alerts + " " + text
+    return text

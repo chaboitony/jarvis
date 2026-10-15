@@ -5,7 +5,7 @@
 #   jarvis-status            print the status each time it changes (Polybar runs this)
 #   jarvis-status --once     print the status once
 #   jarvis-status --toggle   start voice mode, or stop it if it's running   (right click)
-#   jarvis-status --log      open the live log in a terminal                  (middle click)
+#   jarvis-status --log      open the technical log in a terminal
 set -u
 
 RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}"

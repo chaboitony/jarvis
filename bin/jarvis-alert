@@ -1,0 +1,22 @@
+#!/bin/bash
+# jarvis-install: bin
+# jarvis-alert  |  PROJECT RIMA, RIMA-01
+# What a timer or reminder runs when it goes off (started by systemd, see tools/timers.py):
+# a notification that stays until you dismiss it, plus an alarm sound three times.
+#   jarvis-alert "J.A.R.V.I.S. timer" "Time's up: pizza"
+set -u
+
+title="${1:-J.A.R.V.I.S.}"
+message="${2:-}"
+SOUND=/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga
+
+# critical = dunst keeps it on screen until dismissed; its own stack tag so
+# J.A.R.V.I.S.'s ordinary notifications don't replace it
+notify-send -a "J.A.R.V.I.S." -u critical -h string:x-dunst-stack-tag:jarvis-alert \
+    "$title" "<span size='large'>$message</span>"
+
+if [[ -f "$SOUND" ]] && command -v paplay >/dev/null; then
+    for _ in 1 2 3; do
+        paplay "$SOUND" || break
+    done
+fi

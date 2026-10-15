@@ -1,0 +1,105 @@
+#!/bin/bash
+# jarvis-install: bin
+# jarvis-status  |  PROJECT RIMA, RIMA-01
+# The J.A.R.V.I.S. icon on Polybar, plus the controls behind its clicks.
+#   jarvis-status            print the status each time it changes (Polybar runs this)
+#   jarvis-status --once     print the status once
+#   jarvis-status --toggle   start voice mode, or stop it if it's running   (right click)
+#   jarvis-status --log      open the live log in a terminal                  (middle click)
+set -u
+
+RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+PID_FILE="$RUN_DIR/jarvis.pid"
+STATE_FILE="$RUN_DIR/jarvis.state"
+STARTING="$RUN_DIR/jarvis.starting"     # set by jarvis-ptt when it opens a terminal instead
+UNIT="jarvis-voice"
+UNIT_FILE="$HOME/.config/systemd/user/$UNIT.service"
+TERMINAL=(konsole -e)
+
+# Colors (Polybar format tags). Arc-reactor blue = ready.
+C_OFF="#707880"     # grey:   voice mode is off
+C_BUSY="#e5c07b"    # amber:  starting up or thinking
+C_READY="#5ec4ff"   # blue:   ready, or speaking
+C_LISTEN="#ff6b6b"  # red:    listening to you
+C_ERROR="#ff3b3b"   # red:    crashed and gave up
+
+notify() {
+    notify-send -a "J.A.R.V.I.S." -t 3000 -h string:x-dunst-stack-tag:jarvis "$@" 2>/dev/null
+}
+
+running_pid() {  # prints the PID if voice mode is really running
+    local pid
+    pid="$(cat "$PID_FILE" 2>/dev/null)" || return 1
+    [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null \
+        && grep -qa "jarvis.py" "/proc/$pid/cmdline" 2>/dev/null && echo "$pid"
+}
+
+recent() {  # true if the file exists and changed in the last 2 minutes
+    [[ -f "$1" ]] && (( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || echo 0) < 120 ))
+}
+
+status() {
+    if running_pid >/dev/null; then
+        local state
+        state="$(cat "$STATE_FILE" 2>/dev/null)"
+        echo "${state:-ready}"
+    elif recent "$STARTING" || { recent "$STATE_FILE" && [[ "$(cat "$STATE_FILE" 2>/dev/null)" == starting ]]; }; then
+        echo starting
+    elif [[ -f "$UNIT_FILE" ]] && systemctl --user is-failed --quiet "$UNIT" 2>/dev/null; then
+        echo error
+    else
+        echo offline
+    fi
+}
+
+render() {
+    case "$1" in
+        ready)     echo "%{F$C_READY}●%{F-} JARVIS" ;;
+        listening) echo "%{F$C_LISTEN}◉ LISTENING%{F-}" ;;
+        thinking)  echo "%{F$C_BUSY}◉ THINKING%{F-}" ;;
+        speaking)  echo "%{F$C_READY}◉ SPEAKING%{F-}" ;;
+        starting)  echo "%{F$C_BUSY}◌%{F-} JARVIS" ;;
+        error)     echo "%{F$C_ERROR}✕%{F-} JARVIS" ;;
+        *)         echo "%{F$C_OFF}○ JARVIS%{F-}" ;;
+    esac
+}
+
+case "${1:-}" in
+    --once)
+        render "$(status)"
+        ;;
+    --toggle)
+        if [[ -f "$UNIT_FILE" ]]; then
+            if systemctl --user is-active --quiet "$UNIT"; then
+                systemctl --user stop "$UNIT" && notify "Voice mode off"
+            else
+                systemctl --user reset-failed "$UNIT" 2>/dev/null
+                systemctl --user start --no-block "$UNIT" && notify "Starting voice mode…"
+            fi
+        elif pid="$(running_pid)"; then
+            kill -TERM "$pid" && notify "Voice mode off"
+        else
+            "$HOME/.local/bin/jarvis-ptt"
+        fi
+        ;;
+    --log)
+        if [[ -f "$UNIT_FILE" ]]; then
+            setsid -f "${TERMINAL[@]}" journalctl --user -u "$UNIT" -f -n 100 >/dev/null 2>&1
+        else
+            notify "No service log" "Voice mode isn't installed as a service; its output is in its terminal."
+        fi
+        ;;
+    *)
+        # Polybar mode: print a line only when the status changes. Checks often
+        # while running (cheap file reads), less often while off.
+        last=""
+        while true; do
+            now="$(status)"
+            if [[ "$now" != "$last" ]]; then
+                render "$now"
+                last="$now"
+            fi
+            if [[ "$now" == offline || "$now" == error ]]; then sleep 1; else sleep 0.25; fi
+        done
+        ;;
+esac

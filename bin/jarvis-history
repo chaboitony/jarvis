@@ -1,0 +1,40 @@
+#!/bin/bash
+# jarvis-install: bin
+# jarvis-history  |  PROJECT RIMA, RIMA-01
+# Shows today's conversation with J.A.R.V.I.S. in a window, newest at the bottom.
+# Run it again to close the window. Bound to $mod+Shift+t and middle-click on the icon.
+#   jarvis-history            today
+#   jarvis-history 2026-10-14 another day
+set -u
+
+DIR="${XDG_STATE_HOME:-$HOME/.local/state}/jarvis/history"
+DAY="${1:-$(date +%F)}"
+FILE="$DIR/$DAY.txt"
+TITLE="J.A.R.V.I.S. history"
+FONT="DejaVu Sans 13"
+LINES_SHOWN=300
+
+if [[ ! "$DAY" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    echo "Usage: jarvis-history [YYYY-MM-DD]" >&2
+    exit 1
+fi
+
+# Already open? Close it instead, so the same key opens and closes it.
+if pkill -f -- "^zenity --text-info --title=$TITLE"; then
+    exit 0
+fi
+
+if [[ -s "$FILE" ]]; then
+    # a blank line before each thing you said separates the exchanges
+    text="$(tail -n "$LINES_SHOWN" "$FILE" | awk 'NR > 1 && /^[0-9:]+ [AP]M  You/ { print "" } { print }')"
+else
+    text="No conversations with J.A.R.V.I.S. on $DAY yet."
+fi
+
+if command -v zenity >/dev/null; then
+    # Text arrives on stdin, so --auto-scroll can jump to the newest lines
+    printf '%s\n' "$text" | setsid -f zenity --text-info --title="$TITLE" --font="$FONT" \
+        --width=760 --height=640 --auto-scroll >/dev/null 2>&1
+else
+    setsid -f konsole -e less +G "$FILE" >/dev/null 2>&1
+fi

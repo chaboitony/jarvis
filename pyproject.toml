@@ -8,6 +8,7 @@ dependencies = [
     "faster-whisper>=1.2.1",
     "numpy>=2.5.4",
     "ollama>=0.6.3",
+    "pint>=0.26.1",
     "piper-tts>=1.8.0",
     "sounddevice>=0.5.6",
 ]

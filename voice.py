@@ -1,10 +1,13 @@
+# jarvis-install: .
 """
 voice.py  |  PROJECT RIMA, RIMA-01 J.A.R.V.I.S.
 Ears and mouth:
   Ears   microphone -> text   (faster-whisper)
   Mouth  text -> speech       (Piper)
 Both run on the CPU so the GPU stays free for the language model.
+Also: beep() and notify() (desktop notifications through dunst).
 """
+import html
 import re
 import subprocess
 from collections import deque
@@ -117,12 +120,37 @@ def beep(freq=880, ms=120, volume=0.2):
     sd.wait()
 
 
-def notify(title, body=""):
-    """Desktop notification through dunst. Each one replaces the last."""
+# Notification settings; [notifications] in config.toml overrides these
+NOTIFY = {"seconds": 15, "text_size": "large"}
+TEXT_SIZES = {"small", "medium", "large", "x-large", "xx-large"}
+
+
+def configure_notifications(settings):
+    """Apply [notifications] from config.toml, ignoring values that would break the markup."""
+    try:
+        NOTIFY["seconds"] = max(1.0, float(settings.get("seconds", NOTIFY["seconds"])))
+    except (TypeError, ValueError):
+        pass
+    size = str(settings.get("text_size", NOTIFY["text_size"]))
+    if size in TEXT_SIZES:
+        NOTIFY["text_size"] = size
+
+
+def notify(title, body="", seconds=None):
+    """
+    Desktop notification through dunst. Each one replaces the last.
+    The body is shown larger using Pango markup (dunst's default markup = full).
+    Text is escaped first, so characters like < and & appear as typed instead of
+    being read as markup. dunst shows title markup literally, so the title stays plain.
+    """
+    body_markup = ""
+    if body:
+        body_markup = f"<span size='{NOTIFY['text_size']}'>{html.escape(body, quote=False)}</span>"
+    milliseconds = int((seconds or NOTIFY["seconds"]) * 1000)
     try:
         subprocess.run(
-            ["notify-send", "-a", "J.A.R.V.I.S.", "-t", "5000",
-             "-h", "string:x-dunst-stack-tag:jarvis", title, body],
+            ["notify-send", "-a", "J.A.R.V.I.S.", "-t", str(milliseconds),
+             "-h", "string:x-dunst-stack-tag:jarvis", title, body_markup],
             timeout=2,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
