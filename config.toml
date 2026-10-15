@@ -21,9 +21,12 @@ voice_file = "voices/en_GB-alan-medium.onnx"   # relative to ~/rima/jarvis
 # Plugin files in tools/ to load, by file name without ".py".
 # Keep the total number of tools around 10-12; small models choose less
 # accurately from long lists.
-enabled = ["tasks"]
+enabled = ["tasks", "weather"]
 
-# Settings for one plugin go in a [tools.<file name>] section. Example for later:
-# [tools.weather]
-# latitude = 0.0
-# longitude = 0.0
+# Settings for one plugin go in a [tools.<file name>] section.
+
+[tools.weather]
+place = "Manhattan, Kansas"   # what J.A.R.V.I.S. calls home
+latitude = 39.18361
+longitude = -96.57167
+alerts = true                 # check National Weather Service alerts (U.S. only)
