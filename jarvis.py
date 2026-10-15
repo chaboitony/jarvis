@@ -5,6 +5,7 @@ Local model (Ollama) + plugin tools from tools/, by keyboard or by voice.
 
   uv run jarvis.py           typed commands
   uv run jarvis.py --voice   push-to-talk: press the i3 talk key, speak, hear the reply
+                             (normally run in the background by jarvis-voice.service)
 
 Typed commands while running:
   reset    clear memory
@@ -29,7 +30,9 @@ from tools import Toolbox
 
 HERE = Path(__file__).resolve().parent
 CONFIG_FILE = HERE / "config.toml"
-PID_FILE = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "jarvis.pid"
+RUN_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
+PID_FILE = RUN_DIR / "jarvis.pid"      # tells jarvis-ptt which process to signal
+STATE_FILE = RUN_DIR / "jarvis.state"  # what voice mode is doing, for the Polybar icon
 RESET_PHRASES = {"reset", "clear memory", "forget everything"}
 RELOAD_PHRASES = {"reload tools", "reload your tools"}
 
@@ -184,7 +187,35 @@ def typed_mode():
 # --------------------------------------------------------------------------
 # Voice mode
 # --------------------------------------------------------------------------
+def set_state(state):
+    """
+    Record what voice mode is doing: starting, ready, listening, thinking or speaking.
+    Written to a temporary name and then renamed, so a reader never sees half a word.
+    """
+    try:
+        temp = STATE_FILE.with_name(STATE_FILE.name + ".tmp")
+        temp.write_text(state)
+        temp.replace(STATE_FILE)
+    except OSError:
+        pass  # the icon is a nicety; never let it stop J.A.R.V.I.S.
+
+
+def _stop(*_):
+    """SIGTERM (from `systemctl --user stop`) -> exit normally so cleanup runs."""
+    raise SystemExit(0)
+
+
 def voice_mode():
+    signal.signal(signal.SIGTERM, _stop)
+    set_state("starting")
+    try:
+        _voice_loop()
+    finally:
+        PID_FILE.unlink(missing_ok=True)
+        STATE_FILE.unlink(missing_ok=True)
+
+
+def _voice_loop():
     from voice import Ears, Mouth, beep, notify  # only load audio libraries in voice mode
 
     config = load_config()
@@ -208,10 +239,15 @@ def voice_mode():
     signal.signal(signal.SIGUSR1, lambda *_: talk.set())
     signal.signal(signal.SIGUSR2, lambda *_: reload_requested.set())
     PID_FILE.write_text(str(os.getpid()))
+    set_state("ready")
 
     print(_startup_report(brain))
-    print("Voice mode: press the talk key to speak; Ctrl+C to exit.")
-    mouth.say("J.A.R.V.I.S. online.")
+    print("Voice mode: press the talk key to speak. Stop with Ctrl+C, or "
+          "`systemctl --user stop jarvis-voice` when running as a service.")
+    if voice_cfg.get("announce_startup", True):
+        set_state("speaking")
+        mouth.say("J.A.R.V.I.S. online.")
+        set_state("ready")
 
     try:
         while True:
@@ -225,17 +261,21 @@ def voice_mode():
                 continue
             talk.clear()
 
+            set_state("listening")
             beep(880)
             notify("Listening…")
             audio = ears.record()
             beep(660)
             if audio is None:
                 notify("Didn't hear anything")
+                set_state("ready")
                 continue
 
+            set_state("thinking")
             text = ears.transcribe(audio)
             if not text:
                 notify("Couldn't make that out")
+                set_state("ready")
                 continue
             print(f"\nYou (voice): {text}")
             notify("You said", text)
@@ -247,7 +287,7 @@ def voice_mode():
             elif command in RELOAD_PHRASES:
                 report = brain.reload()
                 print(report)
-                reply = "Reload failed. Check the terminal." if report.startswith("Reload failed") \
+                reply = "Reload failed. Check the log." if report.startswith("Reload failed") \
                     else f"Tools reloaded. {len(brain.toolbox.entries)} tools ready."
             else:
                 try:
@@ -258,12 +298,12 @@ def voice_mode():
 
             print(f"J.A.R.V.I.S.: {reply}")
             notify("J.A.R.V.I.S.", reply)
+            set_state("speaking")
             mouth.say(reply)
+            set_state("ready")
             talk.clear()  # ignore presses that happened while busy
     except KeyboardInterrupt:
         print()
-    finally:
-        PID_FILE.unlink(missing_ok=True)
 
 
 def main():

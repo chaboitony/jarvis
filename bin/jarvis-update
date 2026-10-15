@@ -6,7 +6,9 @@
 # Each file says where it belongs in one of its first 5 lines:
 #     # jarvis-install: .        ->  ~/rima/jarvis/
 #     # jarvis-install: tools    ->  ~/rima/jarvis/tools/
-#     # jarvis-install: bin      ->  ~/rima/jarvis/bin/   (+ a link in ~/.local/bin)
+#     # jarvis-install: bin      ->  ~/rima/jarvis/bin/      (+ a link in ~/.local/bin)
+#     # jarvis-install: systemd  ->  ~/rima/jarvis/systemd/  (+ a link in ~/.config/systemd/user)
+#     # jarvis-install: polybar  ->  ~/rima/jarvis/polybar/
 # so new files need no changes to this script. Files written before this system
 # (voice.py, jarvis, jarvis-ptt) are listed in LEGACY below.
 #
@@ -20,6 +22,8 @@ set -u
 DOWNLOADS="$HOME/Downloads"
 JARVIS_DIR="$HOME/rima/jarvis"
 BIN_DIR="$HOME/.local/bin"
+UNIT_DIR="$HOME/.config/systemd/user"
+VOICE_UNIT="jarvis-voice"
 BACKUP_DIR="$JARVIS_DIR/.backups/$(date +%Y-%m-%d_%H%M%S)"
 
 # Files without an install line: file name -> destination
@@ -34,9 +38,11 @@ declare -A LEGACY=(
 # so a file can't put itself somewhere like ~/.bashrc.
 dest_dir() {
     case "$1" in
-        .)     echo "$JARVIS_DIR" ;;
-        tools) echo "$JARVIS_DIR/tools" ;;
-        bin)   echo "$JARVIS_DIR/bin" ;;
+        .)       echo "$JARVIS_DIR" ;;
+        tools)   echo "$JARVIS_DIR/tools" ;;
+        bin)     echo "$JARVIS_DIR/bin" ;;
+        systemd) echo "$JARVIS_DIR/systemd" ;;
+        polybar) echo "$JARVIS_DIR/polybar" ;;
         *)     return 1 ;;
     esac
 }
@@ -81,25 +87,32 @@ except tomllib.TOMLDecodeError as e:
 EOF
             ;;
         *.sh) bash -n "$1" ;;
+        *.service|*.timer)
+            if ! grep -qE '^\[(Service|Timer)\]' "$1"; then
+                echo "  no [Service] or [Timer] section"
+                return 1
+            fi
+            ;;
         *)    if [[ "$3" == bin ]]; then bash -n "$1"; fi ;;
     esac
 }
 
-# Makes ~/.local/bin/<name> a link to the copy in the project folder, so the
-# command keeps working from anywhere while git tracks the real file.
-link_command() {
-    local name="$1" target="$2" link="$BIN_DIR/$name"
+# Makes <folder>/<name> a link to the copy in the project folder, so it keeps
+# working where the system looks for it while git tracks the real file.
+# Used for commands (~/.local/bin) and services (~/.config/systemd/user).
+link_into() {
+    local folder="$1" name="$2" target="$3" link="$1/$2"
     if [[ -L "$link" && "$(readlink -- "$link")" == "$target" ]]; then
         return
     fi
-    mkdir -p "$BIN_DIR"
+    mkdir -p "$folder"
     if [[ -e "$link" && ! -L "$link" ]]; then
-        mkdir -p "$BACKUP_DIR/local-bin"
-        mv -- "$link" "$BACKUP_DIR/local-bin/$name"
-        echo "moved    old ~/.local/bin/$name to the backup folder"
+        mkdir -p "$BACKUP_DIR/replaced-links"
+        mv -- "$link" "$BACKUP_DIR/replaced-links/$name"
+        echo "moved    old ${link/#$HOME/\~} to the backup folder"
     fi
     ln -sfn -- "$target" "$link"
-    echo "linked   ~/.local/bin/$name -> ${target/#$HOME/\~}"
+    echo "linked   ${link/#$HOME/\~} -> ${target/#$HOME/\~}"
 }
 
 # ---------------------------------------------------------------------------
@@ -134,7 +147,7 @@ for name in "${order[@]}"; do
     key="${where[$name]}"
 
     if ! dir="$(dest_dir "$key")"; then
-        echo "SKIPPED  $name says to install into '$key', which isn't allowed (use . tools or bin)."
+        echo "SKIPPED  $name says to install into '$key', which isn't allowed (use . tools bin systemd or polybar)."
         continue
     fi
     if ! check_file "$src" "$name" "$key"; then
@@ -160,7 +173,8 @@ for name in "${order[@]}"; do
         installed+=("$key/$name")
         echo "updated  $name -> ${dir/#$HOME/\~}"
     fi
-    [[ "$key" == bin ]] && link_command "$name" "$dest"
+    [[ "$key" == bin ]] && link_into "$BIN_DIR" "$name" "$dest"
+    [[ "$key" == systemd ]] && link_into "$UNIT_DIR" "$name" "$dest"
 
     # Clear this file's downloads so the next update starts clean
     mapfile -t old < <(printf '%s' "${copies[$name]}")
@@ -176,8 +190,29 @@ fi
 echo "See what changed:  cd ~/rima/jarvis && git status && git diff"
 
 # ---------------------------------------------------------------------------
-# 3. If voice mode is running, reload it or say it needs a restart
+# 3. Let systemd see new service files, then reload or restart voice mode
 # ---------------------------------------------------------------------------
+for f in "${installed[@]}"; do
+    if [[ "$f" == systemd/* ]]; then
+        systemctl --user daemon-reload && echo "systemd  re-read the service files"
+        break
+    fi
+done
+
+needs_restart=false
+for f in "${installed[@]}"; do
+    case "$f" in
+        tools/*|./config.toml|bin/*|polybar/*) ;;   # picked up without a restart
+        *) needs_restart=true ;;
+    esac
+done
+
+# Running as a service: restart it automatically if needed.
+if systemctl --user is-active --quiet "$VOICE_UNIT" 2>/dev/null && $needs_restart; then
+    systemctl --user restart "$VOICE_UNIT" && echo "Restarted voice mode to load the changes."
+    exit 0
+fi
+
 pid_file="${XDG_RUNTIME_DIR:-/tmp}/jarvis.pid"
 [[ -f "$pid_file" ]] || exit 0
 pid="$(cat "$pid_file")"
@@ -185,15 +220,8 @@ pid="$(cat "$pid_file")"
 # at some other program, and the signal would close it).
 if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null \
         && grep -qa "jarvis.py" "/proc/$pid/cmdline" 2>/dev/null; then
-    needs_restart=false
-    for f in "${installed[@]}"; do
-        case "$f" in
-            tools/*|./config.toml|bin/*) ;;   # these can be picked up without a restart
-            *) needs_restart=true ;;
-        esac
-    done
     if $needs_restart; then
-        echo "Voice mode is running. Restart it (Ctrl+C, then: jay --voice) to load the changes."
+        echo "Voice mode is running in a terminal. Restart it (Ctrl+C there, then press the talk key) to load the changes."
     else
         kill -USR2 "$pid" && echo "Voice mode is running; told it to reload its tools."
     fi

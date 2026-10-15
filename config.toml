@@ -16,6 +16,7 @@ keep_turns = 6         # past requests remembered (keeps the context window smal
 [voice]
 whisper_model = "small.en"
 voice_file = "voices/en_GB-alan-medium.onnx"   # relative to ~/rima/jarvis
+announce_startup = true   # say "J.A.R.V.I.S. online" when voice mode starts (at every login)
 
 [tools]
 # Plugin files in tools/ to load, by file name without ".py".

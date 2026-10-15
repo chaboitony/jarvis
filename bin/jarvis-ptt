@@ -1,21 +1,29 @@
 #!/bin/bash
 # jarvis-install: bin
 # jarvis-ptt  |  PROJECT RIMA, RIMA-01
-# The talk key ($mod+t in i3). One key does everything:
-#   * voice mode is running   -> tell it to listen (sends the USR1 signal)
-#   * voice mode isn't running -> open a terminal and start it
-#   * voice mode is starting   -> say so, instead of opening a second copy
+# The talk key ($mod+t in i3, or left-click the Polybar icon). One key does everything:
+#   * voice mode is running    -> tell it to listen (sends the USR1 signal)
+#   * voice mode isn't running -> start it: in the background if the service is
+#                                 installed, otherwise in a terminal window
+#   * voice mode is starting   -> say so, instead of starting a second copy
 set -u
 
 RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}"
 PID_FILE="$RUN_DIR/jarvis.pid"          # written by jarvis.py once it's ready
-STARTING="$RUN_DIR/jarvis.starting"     # exists while voice mode is loading
+STATE_FILE="$RUN_DIR/jarvis.state"      # "starting" while it loads
+STARTING="$RUN_DIR/jarvis.starting"     # terminal mode: exists while it loads
 STARTUP_GRACE=90                        # seconds before a stuck start is retried
-TERMINAL=(konsole -e)                   # your terminal and its "run this command" flag
+UNIT="jarvis-voice"
+UNIT_FILE="$HOME/.config/systemd/user/$UNIT.service"
+TERMINAL=(konsole -e)                   # terminal mode only: your terminal and its "run" flag
 JARVIS="$HOME/.local/bin/jarvis"
 
 notify() {
     notify-send -a "J.A.R.V.I.S." -t 4000 -h string:x-dunst-stack-tag:jarvis "$@" 2>/dev/null
+}
+
+recent() {  # true if the file exists and changed less than STARTUP_GRACE seconds ago
+    [[ -f "$1" ]] && (( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || echo 0) < STARTUP_GRACE ))
 }
 
 # 1. Already running? Only trust the PID file if that process really is
@@ -33,14 +41,26 @@ if [[ -f "$PID_FILE" ]]; then
 fi
 
 # 2. Already starting? (Loading Whisper, the voice and the model takes a few seconds.)
-if [[ -f "$STARTING" ]] && (( $(date +%s) - $(stat -c %Y "$STARTING") < STARTUP_GRACE )); then
+if recent "$STARTING" || { recent "$STATE_FILE" && [[ "$(cat "$STATE_FILE" 2>/dev/null)" == starting ]]; }; then
     notify "Still starting up…" "Wait for \"J.A.R.V.I.S. online\", then press the talk key."
     exit 0
 fi
 
-# 3. Not running: start it in a new terminal.
-#    When voice mode exits, the starting marker is removed. If it stopped with an
-#    error, the window stays open so you can read what went wrong.
+# 3a. Not running, and the service is installed: start it in the background.
+#     (Starting a service that's already starting does nothing, so this is safe.)
+if [[ -f "$UNIT_FILE" ]]; then
+    systemctl --user reset-failed "$UNIT" 2>/dev/null   # allow a restart after a crash
+    if systemctl --user start --no-block "$UNIT"; then
+        notify "Starting voice mode…" "Press the talk key again after \"J.A.R.V.I.S. online\"."
+    else
+        notify "Couldn't start voice mode" "See: journalctl --user -u $UNIT"
+    fi
+    exit 0
+fi
+
+# 3b. No service: start it in a new terminal.
+#     When voice mode exits, the starting marker is removed. If it stopped with an
+#     error, the window stays open so you can read what went wrong.
 touch "$STARTING"
 notify "Starting voice mode…" "Press the talk key again after \"J.A.R.V.I.S. online\"."
 setsid -f "${TERMINAL[@]}" bash -c '

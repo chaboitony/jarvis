@@ -1,0 +1,29 @@
+# jarvis-install: systemd
+# jarvis-voice.service  |  PROJECT RIMA, RIMA-01
+# Runs J.A.R.V.I.S. voice mode in the background, with no terminal window.
+#   start:   systemctl --user start jarvis-voice     (your i3 config does this at login)
+#   stop:    systemctl --user stop jarvis-voice
+#   status:  systemctl --user status jarvis-voice
+#   log:     journalctl --user -u jarvis-voice -f    (or middle-click the Polybar icon)
+
+[Unit]
+Description=J.A.R.V.I.S. voice mode (PROJECT RIMA)
+After=pipewire.service pipewire-pulse.service wireplumber.service
+Wants=pipewire-pulse.service
+# If it keeps crashing, give up after 5 failures in 2 minutes (the icon turns red)
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/rima/jarvis
+ExecStart=%h/.local/bin/jarvis --voice
+# Show printed lines in the log right away instead of in delayed batches
+Environment=PYTHONUNBUFFERED=1
+# Services get a minimal PATH; include ~/.local/bin so uv and the scripts are found
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
+# Restart after a crash (for example, Ollama not ready yet), but not after a normal stop
+Restart=on-failure
+RestartSec=5
+# Stopping sends SIGTERM, which jarvis.py handles by cleaning up; force-stop after 10 s
+TimeoutStopSec=10

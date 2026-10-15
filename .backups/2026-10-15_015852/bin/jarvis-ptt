@@ -1,0 +1,54 @@
+#!/bin/bash
+# jarvis-install: bin
+# jarvis-ptt  |  PROJECT RIMA, RIMA-01
+# The talk key ($mod+t in i3). One key does everything:
+#   * voice mode is running   -> tell it to listen (sends the USR1 signal)
+#   * voice mode isn't running -> open a terminal and start it
+#   * voice mode is starting   -> say so, instead of opening a second copy
+set -u
+
+RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+PID_FILE="$RUN_DIR/jarvis.pid"          # written by jarvis.py once it's ready
+STARTING="$RUN_DIR/jarvis.starting"     # exists while voice mode is loading
+STARTUP_GRACE=90                        # seconds before a stuck start is retried
+TERMINAL=(konsole -e)                   # your terminal and its "run this command" flag
+JARVIS="$HOME/.local/bin/jarvis"
+
+notify() {
+    notify-send -a "J.A.R.V.I.S." -t 4000 -h string:x-dunst-stack-tag:jarvis "$@" 2>/dev/null
+}
+
+# 1. Already running? Only trust the PID file if that process really is
+#    J.A.R.V.I.S. A crash can leave an old PID behind, and Linux may have given
+#    that number to another program, which the signal would close.
+if [[ -f "$PID_FILE" ]]; then
+    pid="$(cat "$PID_FILE" 2>/dev/null)"
+    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null \
+            && grep -qa "jarvis.py" "/proc/$pid/cmdline" 2>/dev/null; then
+        rm -f "$STARTING"
+        kill -USR1 "$pid"
+        exit 0
+    fi
+    rm -f "$PID_FILE"  # left over from a crash
+fi
+
+# 2. Already starting? (Loading Whisper, the voice and the model takes a few seconds.)
+if [[ -f "$STARTING" ]] && (( $(date +%s) - $(stat -c %Y "$STARTING") < STARTUP_GRACE )); then
+    notify "Still starting up…" "Wait for \"J.A.R.V.I.S. online\", then press the talk key."
+    exit 0
+fi
+
+# 3. Not running: start it in a new terminal.
+#    When voice mode exits, the starting marker is removed. If it stopped with an
+#    error, the window stays open so you can read what went wrong.
+touch "$STARTING"
+notify "Starting voice mode…" "Press the talk key again after \"J.A.R.V.I.S. online\"."
+setsid -f "${TERMINAL[@]}" bash -c '
+    "$1" --voice
+    status=$?
+    rm -f "$2"
+    if [ "$status" -ne 0 ]; then
+        echo
+        read -rp "J.A.R.V.I.S. stopped with an error (exit code $status). Press Enter to close. "
+    fi
+' jarvis-voice "$JARVIS" "$STARTING" >/dev/null 2>&1
