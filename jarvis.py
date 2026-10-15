@@ -1,60 +1,58 @@
+# jarvis-install: .
 """
 jarvis.py  |  PROJECT RIMA, RIMA-01 J.A.R.V.I.S.
-Local model (Ollama) + Taskwarrior tools, by keyboard or by voice.
+Local model (Ollama) + plugin tools from tools/, by keyboard or by voice.
 
   uv run jarvis.py           typed commands
   uv run jarvis.py --voice   push-to-talk: press the i3 talk key, speak, hear the reply
 
-Typed commands while running:  reset (clear memory)   quit (exit)
+Typed commands while running:
+  reset    clear memory
+  reload   re-read config.toml and the tool files
+  tools    list the loaded tools
+  quit     exit
+
+Settings live in config.toml. Abilities live in tools/ (see tools/__init__.py).
 """
 import argparse
 import os
 import re
 import signal
 import threading
+import tomllib
 from datetime import datetime
 from pathlib import Path
 
 import ollama
 
-from task_tools import TOOLS, call_tool
-
-MODEL = "qwen3.5:4b"
-# Skip the model's hidden "thinking" step so replies come back quickly.
-# If you switch to a model without thinking support and get an error, set to None.
-THINK = False
-KEEP_ALIVE = "30m"    # keep the model in VRAM this long after the last request
-MAX_TOOL_ROUNDS = 5   # tool calls allowed per request before giving up
-KEEP_TURNS = 6        # past requests remembered (keeps the context window small)
+from tools import Toolbox
 
 HERE = Path(__file__).resolve().parent
-VOICE_FILE = HERE / "voices" / "en_GB-alan-medium.onnx"
-WHISPER_MODEL = "small.en"
+CONFIG_FILE = HERE / "config.toml"
 PID_FILE = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "jarvis.pid"
 RESET_PHRASES = {"reset", "clear memory", "forget everything"}
+RELOAD_PHRASES = {"reload tools", "reload your tools"}
 
 
-def system_prompt():
-    now = datetime.now()
-    return f"""You are J.A.R.V.I.S., the personal assistant of Anthony Rima, who goes by Tony.
+def load_config():
+    """Read config.toml. Raises a readable error if it's missing or has a typo."""
+    try:
+        with CONFIG_FILE.open("rb") as f:
+            return tomllib.load(f)
+    except FileNotFoundError:
+        raise SystemExit(f"Settings file not found: {CONFIG_FILE}")
+    except tomllib.TOMLDecodeError as e:
+        raise SystemExit(f"config.toml has a mistake: {e}")
+
+
+CORE_PROMPT = """You are J.A.R.V.I.S., the personal assistant of Anthony Rima, who goes by Tony.
 Address him as "Mr. Rima", "Tony" or "sir". He is not Tony Stark; never call him Mr. Stark.
 PROJECT RIMA is his personal engineering program, named after him.
 Today is {now:%A, %B %d, %Y}, and the time is {now:%I:%M %p}.
 
-You manage Tony's Taskwarrior tasks with the tools provided.
-Projects match his Obsidian branches:
-- RDC: research and technical theory
-- RAIL: prototypes and engineering builds
-- AOC: coursework and school
-- KIA: archives and reference
-- SOC: planning and strategy
-- POD: project management
+{tool_prompts}
 
-Rules:
-- Use a tool whenever a request involves tasks. Never guess a task ID; call list_tasks first.
-- Choose the project that fits best. If none clearly fits, leave it out.
-- For dates use YYYY-MM-DD, or today, tomorrow, a weekday name, eow, eom or eoy.
-- You cannot delete tasks. If asked, say so and offer to mark the task done instead.
+General rules:
 - If a tool returns an error, explain it simply or fix your request and try again.
 - Requests may come from speech recognition, so expect small transcription mistakes.
 - Reply in one to three short plain sentences with no markdown, because replies may be read aloud."""
@@ -64,20 +62,46 @@ Rules:
 # The brain: shared by typed and voice mode
 # --------------------------------------------------------------------------
 class Brain:
-    def __init__(self):
+    def __init__(self, config):
         self.client = ollama.Client()  # talks to http://localhost:11434
-        self.messages = [{"role": "system", "content": system_prompt()}]
+        self.toolbox = Toolbox()
+        self.apply(config)
+        self.messages = [self._system_message()]
+
+    def apply(self, config):
+        """Take settings from config.toml and (re)load the tool plugins."""
+        brain = config.get("brain", {})
+        self.model = brain.get("model", "qwen3.5:4b")
+        self.think = brain.get("think")  # None = don't send the setting at all
+        self.keep_alive = brain.get("keep_alive", "30m")
+        self.max_tool_rounds = int(brain.get("max_tool_rounds", 5))
+        self.keep_turns = int(brain.get("keep_turns", 6))
+        self.toolbox.load(config)
+
+    def reload(self):
+        """Re-read config.toml and the tool files. Returns a report to show Tony."""
+        try:
+            config = load_config()
+        except SystemExit as e:  # keep running on the old settings
+            return f"Reload failed, still using the old settings. {e}"
+        self.apply(config)
+        return "Tools reloaded:\n" + self.toolbox.summary()
+
+    def _system_message(self):
+        text = CORE_PROMPT.format(now=datetime.now(), tool_prompts=self.toolbox.prompt)
+        return {"role": "system", "content": text}
 
     def warm_up(self):
         """Load the model into VRAM now so the first answer isn't slow."""
-        self.client.generate(model=MODEL, prompt="", keep_alive=KEEP_ALIVE)
+        self.client.generate(model=self.model, prompt="", keep_alive=self.keep_alive)
 
     def reset(self):
         self.messages = self.messages[:1]
 
     def ask(self, text):
-        self.messages[0] = {"role": "system", "content": system_prompt()}  # refresh date/time
+        self.messages[0] = self._system_message()  # refresh date/time and tool instructions
         self.messages.append({"role": "user", "content": text})
+        self.toolbox.start_turn()
         try:
             reply = self._run_turn()
         except Exception:
@@ -88,10 +112,10 @@ class Brain:
 
     def _run_turn(self):
         """Let the model call tools until it has a final answer."""
-        for _ in range(MAX_TOOL_ROUNDS):
+        for _ in range(self.max_tool_rounds):
             response = self.client.chat(
-                model=MODEL, messages=self.messages, tools=TOOLS,
-                think=THINK, keep_alive=KEEP_ALIVE,
+                model=self.model, messages=self.messages, tools=self.toolbox.schemas,
+                think=self.think, keep_alive=self.keep_alive,
             )
             msg = response.message
             self.messages.append(msg)
@@ -102,26 +126,31 @@ class Brain:
             for call in msg.tool_calls:
                 name = call.function.name
                 args = call.function.arguments or {}
-                result = call_tool(name, args)
+                result = self.toolbox.call(name, args)
                 print(f"  [tool] {name}({args}) -> {result[:200]}")
                 self.messages.append({"role": "tool", "content": result, "tool_name": name})
 
         return "I couldn't finish that request. Try rephrasing it."
 
     def _trim(self):
-        """Keep the system prompt plus the last KEEP_TURNS requests and their replies."""
+        """Keep the system prompt plus the last keep_turns requests and their replies."""
         user_positions = [i for i, m in enumerate(self.messages) if m["role"] == "user"]
-        if len(user_positions) > KEEP_TURNS:
-            cut = user_positions[-KEEP_TURNS]
+        if len(user_positions) > self.keep_turns:
+            cut = user_positions[-self.keep_turns]
             self.messages = [self.messages[0], *self.messages[cut:]]
+
+
+def _startup_report(brain):
+    return f"J.A.R.V.I.S. online ({brain.model}). Tools:\n{brain.toolbox.summary()}"
 
 
 # --------------------------------------------------------------------------
 # Typed mode
 # --------------------------------------------------------------------------
 def typed_mode():
-    brain = Brain()
-    print(f"J.A.R.V.I.S. online ({MODEL}). Type 'reset' to clear memory or 'quit' to exit.")
+    brain = Brain(load_config())
+    print(_startup_report(brain))
+    print("Commands: reset, reload, tools, quit.")
 
     while True:
         try:
@@ -131,11 +160,18 @@ def typed_mode():
             break
         if not text:
             continue
-        if text.lower() in {"quit", "exit"}:
+        command = text.lower()
+        if command in {"quit", "exit"}:
             break
-        if text.lower() == "reset":
+        if command == "reset":
             brain.reset()
             print("Memory cleared.")
+            continue
+        if command == "reload":
+            print(brain.reload())
+            continue
+        if command == "tools":
+            print(brain.toolbox.summary())
             continue
         try:
             reply = brain.ask(text)
@@ -151,26 +187,40 @@ def typed_mode():
 def voice_mode():
     from voice import Ears, Mouth, beep, notify  # only load audio libraries in voice mode
 
-    if not VOICE_FILE.exists():
-        raise SystemExit(f"Voice file not found: {VOICE_FILE}\nDownload it first (see setup steps).")
+    config = load_config()
+    voice_cfg = config.get("voice", {})
+    voice_file = HERE / voice_cfg.get("voice_file", "voices/en_GB-alan-medium.onnx")
+    if not voice_file.exists():
+        raise SystemExit(f"Voice file not found: {voice_file}\nDownload it first (see setup steps).")
 
     print("Loading speech recognition, voice and language model...")
-    ears = Ears(WHISPER_MODEL)
-    mouth = Mouth(VOICE_FILE)
-    brain = Brain()
+    ears = Ears(voice_cfg.get("whisper_model", "small.en"))
+    mouth = Mouth(voice_file)
+    brain = Brain(config)
     brain.warm_up()
 
-    # The talk key sends this process the USR1 signal (see jarvis-ptt).
-    # The PID file tells jarvis-ptt which process to signal.
+    # Signals from other programs (the PID file tells them which process to signal):
+    #   USR1  the talk key was pressed (sent by jarvis-ptt)
+    #   USR2  tool files changed, reload them (sent by jarvis-update)
+    # The handlers only set flags; the main loop does the work between requests.
     talk = threading.Event()
+    reload_requested = threading.Event()
     signal.signal(signal.SIGUSR1, lambda *_: talk.set())
+    signal.signal(signal.SIGUSR2, lambda *_: reload_requested.set())
     PID_FILE.write_text(str(os.getpid()))
 
-    print(f"J.A.R.V.I.S. voice mode online ({MODEL}). Press the talk key to speak; Ctrl+C to exit.")
+    print(_startup_report(brain))
+    print("Voice mode: press the talk key to speak; Ctrl+C to exit.")
     mouth.say("J.A.R.V.I.S. online.")
 
     try:
         while True:
+            if reload_requested.is_set():
+                reload_requested.clear()
+                report = brain.reload()
+                print(report)
+                notify("J.A.R.V.I.S.", report)
+
             if not talk.wait(timeout=0.5):  # short timeout keeps Ctrl+C responsive
                 continue
             talk.clear()
@@ -190,9 +240,15 @@ def voice_mode():
             print(f"\nYou (voice): {text}")
             notify("You said", text)
 
-            if re.sub(r"[^a-z ]", "", text.lower()).strip() in RESET_PHRASES:
+            command = re.sub(r"[^a-z ]", "", text.lower()).strip()
+            if command in RESET_PHRASES:
                 brain.reset()
                 reply = "Memory cleared."
+            elif command in RELOAD_PHRASES:
+                report = brain.reload()
+                print(report)
+                reply = "Reload failed. Check the terminal." if report.startswith("Reload failed") \
+                    else f"Tools reloaded. {len(brain.toolbox.entries)} tools ready."
             else:
                 try:
                     reply = brain.ask(text)

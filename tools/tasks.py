@@ -1,6 +1,7 @@
+# jarvis-install: tools
 """
-task_tools.py  |  PROJECT RIMA, RIMA-01 J.A.R.V.I.S.
-The Taskwarrior actions the AI is allowed to take.
+tools/tasks.py  |  PROJECT RIMA, RIMA-01 J.A.R.V.I.S.
+The Taskwarrior actions the AI is allowed to take. (Formerly task_tools.py.)
 
 Safety rules:
   * Commands run as an argument list, never through a shell, so text from the
@@ -14,6 +15,8 @@ import re
 import subprocess
 from datetime import datetime, timezone
 
+from tools import tool
+
 # Obsidian branch names double as Taskwarrior projects
 PROJECTS = ["RDC", "RAIL", "AOC", "KIA", "SOC", "POD"]
 
@@ -24,6 +27,22 @@ DATE_WORDS = {
 ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SUBPROJECT = re.compile(r"^[A-Za-z0-9_-]+$")
 MAX_LIST = 15
+
+# Added to the system prompt while this plugin is enabled
+PROMPT = """You manage Tony's Taskwarrior tasks with the task tools.
+Projects match his Obsidian branches:
+- RDC: research and technical theory
+- RAIL: prototypes and engineering builds
+- AOC: coursework and school
+- KIA: archives and reference
+- SOC: planning and strategy
+- POD: project management
+
+Task rules:
+- Use a tool whenever a request involves tasks. Never guess a task ID; call list_tasks first.
+- Choose the project that fits best. If none clearly fits, leave it out.
+- For dates use YYYY-MM-DD, or today, tomorrow, a weekday name, eow, eom or eoy.
+- You cannot delete tasks. If asked, say so and offer to mark the task done instead."""
 
 
 # --------------------------------------------------------------------------
@@ -96,8 +115,32 @@ def _fmt_due(stamp):
 
 
 # --------------------------------------------------------------------------
+# What the model sees. These schemas are written by hand (instead of built
+# from docstrings) so the wording stays exactly as it was tuned in stage 1.
+# --------------------------------------------------------------------------
+_PROJECT_HELP = "Project: RDC, RAIL, AOC, KIA, SOC or POD, optionally with a sub-project like RAIL.jarvis"
+_DUE_HELP = "Due date: YYYY-MM-DD, today, tomorrow, a weekday name, eow, eom or eoy"
+_PRIORITY_HELP = "Priority: H, M or L"
+
+
+def _schema(name, description, properties, required=()):
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {"type": "object", "properties": properties, "required": list(required)},
+        },
+    }
+
+
+# --------------------------------------------------------------------------
 # Tools
 # --------------------------------------------------------------------------
+@tool(schema=_schema(
+    "list_tasks", "List pending tasks with their ID numbers, most urgent first.",
+    {"project": {"type": "string", "description": "Optional. Only show this project."}},
+))
 def list_tasks(project=None):
     args = ["status:pending"]
     if project:
@@ -120,6 +163,16 @@ def list_tasks(project=None):
     return f"Pending tasks, most urgent first{note}: " + json.dumps(rows)
 
 
+@tool(writes=True, schema=_schema(
+    "add_task", "Add a new task.",
+    {
+        "description": {"type": "string", "description": "What needs to be done, short and clear."},
+        "project": {"type": "string", "description": f"Optional. {_PROJECT_HELP}"},
+        "due": {"type": "string", "description": f"Optional. {_DUE_HELP}"},
+        "priority": {"type": "string", "description": f"Optional. {_PRIORITY_HELP}"},
+    },
+    required=["description"],
+))
 def add_task(description, project=None, due=None, priority=None):
     description = (description or "").strip()
     if not description:
@@ -139,6 +192,11 @@ def add_task(description, project=None, due=None, priority=None):
     return _run(args, verbose="new-id") or "Task added."
 
 
+@tool(writes=True, schema=_schema(
+    "complete_task", "Mark a pending task as done, by its ID number from list_tasks.",
+    {"task_id": {"type": "integer", "description": "The task's ID number."}},
+    required=["task_id"],
+))
 def complete_task(task_id):
     task_id = _check_id(task_id)
     task = _get_task(task_id)
@@ -146,6 +204,16 @@ def complete_task(task_id):
     return f"Completed task {task_id}: {task['description']}. (Remaining task IDs may renumber.)"
 
 
+@tool(writes=True, schema=_schema(
+    "modify_task", "Change a pending task's due date, priority or project, by its ID number.",
+    {
+        "task_id": {"type": "integer", "description": "The task's ID number."},
+        "due": {"type": "string", "description": f"Optional. {_DUE_HELP}"},
+        "priority": {"type": "string", "description": f"Optional. {_PRIORITY_HELP}"},
+        "project": {"type": "string", "description": f"Optional. {_PROJECT_HELP}"},
+    },
+    required=["task_id"],
+))
 def modify_task(task_id, due=None, priority=None, project=None):
     task_id = _check_id(task_id)
     task = _get_task(task_id)
@@ -160,100 +228,3 @@ def modify_task(task_id, due=None, priority=None, project=None):
         raise ValueError("Nothing to change. Give a new due date, priority or project.")
     _run([str(task_id), "modify", *changes])
     return f"Updated task {task_id} ({task['description']}): {' '.join(changes)}"
-
-
-# --------------------------------------------------------------------------
-# What the model sees: names, descriptions and allowed arguments
-# --------------------------------------------------------------------------
-_PROJECT_HELP = "Project: RDC, RAIL, AOC, KIA, SOC or POD, optionally with a sub-project like RAIL.jarvis"
-_DUE_HELP = "Due date: YYYY-MM-DD, today, tomorrow, a weekday name, eow, eom or eoy"
-_PRIORITY_HELP = "Priority: H, M or L"
-
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "list_tasks",
-            "description": "List pending tasks with their ID numbers, most urgent first.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "project": {"type": "string", "description": "Optional. Only show this project."},
-                },
-                "required": [],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "add_task",
-            "description": "Add a new task.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "description": {"type": "string", "description": "What needs to be done, short and clear."},
-                    "project": {"type": "string", "description": f"Optional. {_PROJECT_HELP}"},
-                    "due": {"type": "string", "description": f"Optional. {_DUE_HELP}"},
-                    "priority": {"type": "string", "description": f"Optional. {_PRIORITY_HELP}"},
-                },
-                "required": ["description"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "complete_task",
-            "description": "Mark a pending task as done, by its ID number from list_tasks.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "task_id": {"type": "integer", "description": "The task's ID number."},
-                },
-                "required": ["task_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "modify_task",
-            "description": "Change a pending task's due date, priority or project, by its ID number.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "task_id": {"type": "integer", "description": "The task's ID number."},
-                    "due": {"type": "string", "description": f"Optional. {_DUE_HELP}"},
-                    "priority": {"type": "string", "description": f"Optional. {_PRIORITY_HELP}"},
-                    "project": {"type": "string", "description": f"Optional. {_PROJECT_HELP}"},
-                },
-                "required": ["task_id"],
-            },
-        },
-    },
-]
-
-FUNCTIONS = {
-    "list_tasks": list_tasks,
-    "add_task": add_task,
-    "complete_task": complete_task,
-    "modify_task": modify_task,
-}
-
-
-def call_tool(name, arguments):
-    """Run one tool call from the model and always return text it can read."""
-    func = FUNCTIONS.get(name)
-    if func is None:
-        return f"Error: there is no tool named '{name}'."
-    try:
-        return func(**(arguments or {}))
-    except TypeError as e:
-        return f"Error: wrong arguments for {name} ({e})."
-    except ValueError as e:
-        return f"Error: {e}"
-    except subprocess.TimeoutExpired:
-        return "Error: Taskwarrior took too long to respond."
-    except FileNotFoundError:
-        return "Error: Taskwarrior (the `task` command) is not installed."
