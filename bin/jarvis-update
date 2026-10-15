@@ -1,0 +1,85 @@
+#!/bin/bash
+# ~/.local/bin/jarvis-update  |  PROJECT RIMA, RIMA-01
+# Installs J.A.R.V.I.S. files you downloaded:
+#   * picks the newest download of each file, even if Chrome renamed it "name (1).py"
+#   * checks each file for syntax errors before installing it
+#   * backs up the old version first, then moves the new one into place
+# Undo: the old versions are in ~/rima/jarvis/.backups/<date-time>/
+DOWNLOADS="$HOME/Downloads"
+JARVIS_DIR="$HOME/rima/jarvis"
+BIN_DIR="$HOME/.local/bin"
+BACKUP_DIR="$JARVIS_DIR/.backups/$(date +%Y-%m-%d_%H%M%S)"
+
+# file name -> folder it belongs in
+declare -A DEST=(
+    [jarvis.py]="$JARVIS_DIR"
+    [voice.py]="$JARVIS_DIR"
+    [task_tools.py]="$JARVIS_DIR"
+    [jarvis]="$BIN_DIR"
+    [jarvis-ptt]="$BIN_DIR"
+    [jarvis-update]="$BIN_DIR"
+)
+
+downloads_of() {
+    # Every download of this file, newest first: "name.ext", "name (1).ext", ...
+    local name="$1" base ext
+    if [[ "$name" == *.* ]]; then base="${name%.*}"; ext=".${name##*.}"; else base="$name"; ext=""; fi
+    ls -1t "$DOWNLOADS/$name" "$DOWNLOADS/$base ("*")$ext" 2>/dev/null
+}
+
+syntax_ok() {
+    if [[ "$2" == *.py ]]; then
+        python3 - "$1" <<'EOF'
+import ast, sys
+try:
+    ast.parse(open(sys.argv[1]).read(), sys.argv[1])
+except SyntaxError as e:
+    print(f"  line {e.lineno}: {e.msg}")
+    sys.exit(1)
+EOF
+    else
+        bash -n "$1"
+    fi
+}
+
+installed=()
+for name in "${!DEST[@]}"; do
+    mapfile -t copies < <(downloads_of "$name")
+    [[ ${#copies[@]} -eq 0 ]] && continue
+    src="${copies[0]}"
+    dest="${DEST[$name]}/$name"
+
+    if ! syntax_ok "$src" "$name"; then
+        echo "SKIPPED  $name has a syntax error; kept the current version."
+        continue
+    fi
+
+    if [[ -f "$dest" ]] && cmp -s "$src" "$dest"; then
+        echo "same     $name (already installed)"
+    else
+        if [[ -f "$dest" ]]; then
+            mkdir -p "$BACKUP_DIR"
+            cp -p "$dest" "$BACKUP_DIR/$name"
+        fi
+        mkdir -p "${DEST[$name]}"
+        cp "$src" "$dest"
+        [[ "${DEST[$name]}" == "$BIN_DIR" ]] && chmod +x "$dest"
+        installed+=("$name")
+        echo "updated  $name -> ${DEST[$name]/#$HOME/\~}"
+    fi
+
+    # Clear this file's downloads so the next update starts clean
+    rm -f "${copies[@]}"
+done
+
+if [[ ${#installed[@]} -eq 0 ]]; then
+    echo "Nothing new to install from ${DOWNLOADS/#$HOME/\~}."
+    exit 0
+fi
+
+[[ -d "$BACKUP_DIR" ]] && echo "Old versions saved in ${BACKUP_DIR/#$HOME/\~}"
+
+pid_file="${XDG_RUNTIME_DIR:-/tmp}/jarvis.pid"
+if [[ -f "$pid_file" ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+    echo "Voice mode is running. Restart it (Ctrl+C, then: jay --voice) to load the changes."
+fi

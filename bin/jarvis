@@ -1,0 +1,26 @@
+#!/bin/bash
+# ~/.local/bin/jarvis  |  PROJECT RIMA, RIMA-01
+# Start J.A.R.V.I.S. from anywhere:
+#   jarvis            typed commands
+#   jarvis --voice    push-to-talk voice mode
+# Add --window when launching in its own terminal (rofi, i3) so errors stay visible.
+JARVIS_DIR="$HOME/rima/jarvis"
+
+window=0
+args=()
+for arg in "$@"; do
+    if [[ "$arg" == "--window" ]]; then
+        window=1
+    else
+        args+=("$arg")
+    fi
+done
+export HF_HUB_OFFLINE=1   # use the downloaded Whisper model; never contact Hugging Face
+cd "$JARVIS_DIR" || { echo "Can't find $JARVIS_DIR"; exit 1; }
+uv run jarvis.py "${args[@]}"
+status=$?
+
+if [[ $window -eq 1 && $status -ne 0 ]]; then
+    read -rp "J.A.R.V.I.S. exited with an error (code $status). Press Enter to close."
+fi
+exit $status
