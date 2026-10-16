@@ -40,9 +40,18 @@ A plugin file can contain:
     @tool(schema={...})     give the JSON schema by hand instead of building it
                             from the function's signature and docstring.
 
-Routing: with many plugins loaded, only the few that match a request are offered
-to the model (see Toolbox.select). Each plugin is described for routing by its
-name, PROMPT, tool descriptions and EXAMPLES, so good EXAMPLES matter.
+Tools made while running (the MCP bridge, tools/mcp.py): a plugin can also fill
+two module-level variables in setup():
+    RUNTIME_TOOLS = [{"name", "func", "schema", "writes", "untrusted", "group"}, ...]
+    GROUPS = {"mcp:git": {"prompt": "...", "examples": [...]}, ...}
+and may define shutdown(), which is called when the plugin is reloaded or
+J.A.R.V.I.S. exits (to stop the programs it started).
+
+Routing: with many tools loaded, only the few groups that match a request are
+offered to the model (see Toolbox.select). A group is normally one plugin file;
+the MCP bridge adds one group per server (e.g. "mcp:git"). Each group is
+described for routing by its name, PROMPT, tool descriptions and EXAMPLES, so
+good EXAMPLES matter.
 
 Rules for tool functions:
   * Return plain text (or something that turns into text).
@@ -161,6 +170,16 @@ def build_schema(func):
     }
 
 
+def _shutdown(module):
+    """Call a plugin's shutdown(), if it has one, without letting it crash J.A.R.V.I.S."""
+    stop = getattr(module, "shutdown", None)
+    if callable(stop):
+        try:
+            stop()
+        except Exception:
+            traceback.print_exc()
+
+
 def _cosine(a, b):
     """How alike two embeddings are: 1 = same direction, 0 = unrelated."""
     dot = sum(x * y for x, y in zip(a, b))
@@ -173,8 +192,10 @@ def _cosine(a, b):
 # --------------------------------------------------------------------------
 class Toolbox:
     def __init__(self):
-        self.entries = {}     # tool name -> {"func", "schema", "writes", "untrusted", "plugin"}
-        self.prompts = {}     # plugin name -> its PROMPT text
+        self.entries = {}     # tool name -> {"func", "schema", "writes", "untrusted", "plugin", "group"}
+        self.prompts = {}     # group name -> its PROMPT text
+        self.examples = {}    # group name -> its EXAMPLES
+        self.groups = []      # routing groups, in config order
         self.modules = {}     # plugin name -> module
         self.route_error = None
         self._doc_vectors = None  # plugin name -> embedding, built on first routed request
@@ -192,13 +213,14 @@ class Toolbox:
         tools_cfg = config.get("tools", {})
         enabled = tools_cfg.get("enabled", [])
         available = sorted(m.name for m in pkgutil.iter_modules(__path__) if not m.name.startswith("_"))
-        entries, prompts, loaded, problems = {}, {}, [], []
+        entries, prompts, examples, groups, loaded, problems = {}, {}, {}, [], [], []
         modules = {}
 
         for plugin in enabled:
             if plugin not in available:
                 problems.append(f"{plugin}: there is no file tools/{plugin}.py")
                 continue
+            module = None
             try:
                 module = self._import(plugin)
                 settings = tools_cfg.get(plugin, {})
@@ -207,24 +229,43 @@ class Toolbox:
                 found = self._collect(module, plugin)
             except Exception as e:
                 problems.append(f"{plugin}: {type(e).__name__}: {e}")
+                _shutdown(module)  # it may have started something before failing
                 continue
             clashes = sorted(set(found) & set(entries))
             if clashes:
                 problems.append(f"{plugin}: tool name already used by another plugin: {', '.join(clashes)}")
+                _shutdown(module)
                 continue
             entries.update(found)
             loaded.append(plugin)
             modules[plugin] = module
-            text = str(getattr(module, "PROMPT", "") or "").strip()
-            if text:
-                prompts[plugin] = text
+            plugin_prompt = str(getattr(module, "PROMPT", "") or "").strip()
+            plugin_examples = list(getattr(module, "EXAMPLES", None) or [])
+            runtime_groups = getattr(module, "GROUPS", None) or {}
+            for group in dict.fromkeys(e["group"] for e in found.values()):
+                groups.append(group)
+                info = runtime_groups.get(group, {})
+                text = str(info.get("prompt", "") or "").strip() or (plugin_prompt if group == plugin else "")
+                if text:
+                    prompts[group] = text
+                examples[group] = list(info.get("examples", [])) or (plugin_examples if group == plugin else [])
 
-        self.entries, self.prompts, self.loaded = entries, prompts, loaded
-        self.available, self.problems = available, problems
+        old = self.modules
+        self.entries, self.prompts, self.examples, self.groups = entries, prompts, examples, groups
+        self.loaded, self.available, self.problems = loaded, available, problems
         self.modules = modules
         self._doc_vectors = None  # plugins changed, so routing descriptions must be rebuilt
         LOADED.clear()
         LOADED.update(modules)
+        # Stop what the previous copies of reloaded plugins started (e.g. MCP servers)
+        for name, module in old.items():
+            if modules.get(name) is not module:
+                _shutdown(module)
+
+    def close(self):
+        """Stop everything the plugins started. Called when J.A.R.V.I.S. exits."""
+        for module in self.modules.values():
+            _shutdown(module)
 
     @staticmethod
     def _import(plugin):
@@ -248,7 +289,14 @@ class Toolbox:
             name = schema.get("function", {}).get("name")
             if name != obj.__name__:
                 raise ValueError(f"schema name '{name}' doesn't match function '{obj.__name__}'")
-            found[name] = {**info, "func": obj, "schema": schema, "plugin": plugin}
+            found[name] = {**info, "func": obj, "schema": schema, "plugin": plugin, "group": plugin}
+        for item in getattr(module, "RUNTIME_TOOLS", None) or []:
+            name = item["schema"]["function"]["name"]
+            if name in found:
+                raise ValueError(f"two tools are called '{name}'")
+            found[name] = {"func": item["func"], "schema": item["schema"],
+                           "writes": bool(item.get("writes")), "untrusted": bool(item.get("untrusted")),
+                           "plugin": plugin, "group": item.get("group") or plugin}
         if not found:
             raise ValueError("no @tool functions found")
         return found
@@ -262,53 +310,53 @@ class Toolbox:
     def prompt(self):
         return "\n\n".join(self.prompts.values())
 
-    def schemas_for(self, plugins):
-        """The tool descriptions for only these plugins."""
-        return [e["schema"] for e in self.entries.values() if e["plugin"] in plugins]
+    def schemas_for(self, groups):
+        """The tool descriptions for only these groups."""
+        return [e["schema"] for e in self.entries.values() if e["group"] in groups]
 
-    def prompt_for(self, plugins):
-        """The PROMPT instructions for only these plugins."""
-        return "\n\n".join(text for name, text in self.prompts.items() if name in plugins)
+    def prompt_for(self, groups):
+        """The PROMPT instructions for only these groups."""
+        return "\n\n".join(text for name, text in self.prompts.items() if name in groups)
 
     # ---- routing ---------------------------------------------------------
-    def describe_plugin(self, plugin):
+    def describe_group(self, group):
         """The text routing compares requests against: name, instructions, tools, examples."""
-        parts = [f"{plugin}."]
-        if plugin in self.prompts:
-            parts.append(self.prompts[plugin])
+        parts = [f"{group.replace('mcp:', '')}."]
+        if group in self.prompts:
+            parts.append(self.prompts[group])
         for entry in self.entries.values():
-            if entry["plugin"] != plugin:
+            if entry["group"] != group:
                 continue
             fn = entry["schema"]["function"]
             parts.append(fn.get("description", ""))
             for prop in fn.get("parameters", {}).get("properties", {}).values():
                 parts.append(prop.get("description", ""))
-        examples = getattr(self.modules.get(plugin), "EXAMPLES", None) or []
+        examples = self.examples.get(group) or []
         if examples:
             parts.append("Examples: " + "; ".join(str(e) for e in examples))
         return " ".join(" ".join(parts).split())
 
     def select(self, text, embed, sticky=(), top=3):
         """
-        Choose which plugins' tools to offer for one request, so the model picks
+        Choose which groups' tools to offer for one request, so the model picks
         from a short list instead of every tool.
 
         embed(list of texts) -> list of vectors (an embedding model turns text into
         numbers so that texts with similar meaning get similar numbers). Each
         plugin's description is embedded once; each request is embedded and
-        compared to them by cosine similarity. The best `top` plugins are chosen,
+        compared to them by cosine similarity. The best `top` groups are chosen,
         plus `sticky` ones (used in the last request, so follow-ups like
         "and tomorrow?" still work).
 
-        Returns (chosen plugins in config order, {plugin: score}). If embedding
-        fails, every plugin is returned, so routing can never make tools vanish.
+        Returns (chosen groups in config order, {group: score}). If embedding
+        fails, every group is returned, so routing can never make tools vanish.
         """
-        plugins = list(self.loaded)
+        plugins = list(self.groups)
         if len(plugins) <= top:
             return plugins, {}
         try:
             if self._doc_vectors is None:
-                docs = ["search_document: " + self.describe_plugin(p) for p in plugins]
+                docs = ["search_document: " + self.describe_group(p) for p in plugins]
                 self._doc_vectors = dict(zip(plugins, embed(docs)))
             [query] = embed(["search_query: " + text])
             self.route_error = None
@@ -323,9 +371,9 @@ class Toolbox:
     def summary(self):
         """A short report for the screen: what loaded, what's off, what failed."""
         lines = []
-        for plugin in self.loaded:
-            names = [n for n, e in self.entries.items() if e["plugin"] == plugin]
-            lines.append(f"  {plugin}: {', '.join(names)}")
+        for group in self.groups:
+            names = [n for n, e in self.entries.items() if e["group"] == group]
+            lines.append(f"  {group}: {', '.join(names)}")
         off = [p for p in self.available if p not in self.loaded and
                not any(prob.startswith(f"{p}:") for prob in self.problems)]
         if off:

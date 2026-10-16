@@ -17,7 +17,7 @@ Typed commands while running:
   reset    clear memory
   reload   re-read config.toml and the tool files
   tools    list the loaded tools
-  route X  show which plugins request X would be offered (routing check)
+  route X  show which tool groups request X would be offered (routing check)
   quit     exit
 
 Voice mode streams: J.A.R.V.I.S. starts speaking the first sentence while the
@@ -184,7 +184,7 @@ class Brain:
         self.toolbox = Toolbox()
         self.last_plugins = []  # plugins used in the last request (kept for follow-ups)
         self.apply(config)
-        self.messages = [self._system_message(self.toolbox.loaded)]
+        self.messages = [self._system_message(self.toolbox.groups)]
 
     def apply(self, config):
         """Take settings from config.toml and (re)load the tool plugins."""
@@ -199,7 +199,7 @@ class Brain:
         self.routing_plugins = max(1, int(brain.get("routing_plugins", 3)))
         self.embed_model = brain.get("embed_model", "nomic-embed-text")
         self.toolbox.load(config)
-        self.last_plugins = [p for p in self.last_plugins if p in self.toolbox.loaded]
+        self.last_plugins = [p for p in self.last_plugins if p in self.toolbox.groups]
 
     def reload(self):
         """Re-read config.toml and the tool files. Returns a report to show Tony."""
@@ -221,7 +221,7 @@ class Brain:
     def route(self, text):
         """Which plugins to offer for this request: ([plugins], {plugin: score})."""
         if not self.routing:
-            return list(self.toolbox.loaded), {}
+            return list(self.toolbox.groups), {}
         return self.toolbox.select(text, self._embed, sticky=self.last_plugins, top=self.routing_plugins)
 
     def warm_up(self):
@@ -236,6 +236,10 @@ class Brain:
     def reset(self):
         self.messages = self.messages[:1]
         self.last_plugins = []
+
+    def close(self):
+        """Stop the programs tool plugins started (MCP servers)."""
+        self.toolbox.close()
 
     def ask(self, text, on_text=None, on_sentence=None, cancel=None):
         """
@@ -333,7 +337,7 @@ class Brain:
                 args = call.function.arguments or {}
                 result = self.toolbox.call(name, args)
                 if name in self.toolbox.entries:
-                    used.add(self.toolbox.entries[name]["plugin"])
+                    used.add(self.toolbox.entries[name]["group"])
                 self.last_tools.append(name)
                 print(f"  [tool] {name}({args}) -> {result[:200]}")
                 self.messages.append({"role": "tool", "content": result, "tool_name": name})
@@ -421,6 +425,7 @@ def typed_mode():
         if not "".join(shown).strip():
             print(f"J.A.R.V.I.S.: {reply}")
         log_exchange("J.A.R.V.I.S.", reply)
+    brain.close()
 
 
 # --------------------------------------------------------------------------
@@ -589,6 +594,7 @@ def _voice_loop():
     finally:
         media.resume()
         mouth.close()
+        brain.close()
 
 
 # --------------------------------------------------------------------------
