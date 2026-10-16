@@ -1,21 +1,16 @@
+# jarvis-install: .
 [project]
 name = "jarvis"
 version = "0.1.0"
-description = "Add your description here"
+description = "J.A.R.V.I.S., the local voice assistant of PROJECT RIMA (RIMA-01)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "faster-whisper>=1.2.1",
     "numpy>=2.5.4",
+    "nvidia-cublas-cu12>=12.9.2.10",
     "ollama>=0.6.3",
     "pint>=0.26.1",
     "piper-tts>=1.8.0",
     "sounddevice>=0.5.6",
 ]
-
-[project.scripts]
-jarvis = "jarvis:main"
-
-[build-system]
-requires = ["uv_build>=0.13.1,<0.14.0"]
-build-backend = "uv_build"
