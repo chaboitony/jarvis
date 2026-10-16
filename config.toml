@@ -51,17 +51,22 @@ start_timeout = 6.0         # give up if you haven't started talking after this 
 save_last_recording = true  # keep the last request at $XDG_RUNTIME_DIR/jarvis-last.wav (RAM only)
 
 # ---- Speaking ----
-tts_engine = "piper"      # "piper" (default) or "kokoro" (more natural; see below)
-voice_file = "voices/en_GB-alan-medium.onnx"   # Piper voice, relative to ~/rima/jarvis
-speed = 1.0               # 1.0 = normal, 1.2 = 20% faster
-# Kokoro, optional. Setup (two files from the kokoro-onnx GitHub releases, ~120 MB):
+# Hear the options with `jarvis --voice-test` (add --voices "a|b" or --speed 1.1 to try others).
+tts_engine = "kokoro"     # "kokoro" (natural) or "piper" (fallback; used automatically if Kokoro can't load)
+speed = 1.0               # 1.0 = normal, 1.1 = 10% faster
+sentence_pause = 0.25     # seconds of silence between sentences
+volume = 1.0              # 1.0 = as made; 0.8 = quieter
+# Kokoro setup (once). Two files from the kokoro-onnx GitHub releases (~355 MB):
 #   cd ~/rima/jarvis && uv add kokoro-onnx
-#   wget -P voices https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx
+#   wget -P voices https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx
 #   wget -P voices https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
-# British voices: bm_george, bm_lewis, bm_daniel, bm_fable (men); bf_emma, bf_isabella (women)
-kokoro_model = "voices/kokoro-v1.0.int8.onnx"
+# (kokoro-v1.0.int8.onnx is smaller, 92 MB, but no faster on this CPU and slightly rougher.)
+kokoro_model = "voices/kokoro-v1.0.onnx"
 kokoro_voices = "voices/voices-v1.0.bin"
-kokoro_voice = "bm_george"
+# British men: bm_george, bm_lewis, bm_daniel, bm_fable. Women: bf_emma, bf_isabella, bf_alice, bf_lily.
+# Blend voices with weights, e.g. "bm_george:0.6,bm_fable:0.4".
+kokoro_voice = "bm_lewis"
+voice_file = "voices/en_GB-alan-medium.onnx"   # Piper voice, relative to ~/rima/jarvis
 
 [notifications]
 seconds = 15            # how long a reply stays on screen

@@ -15,8 +15,16 @@ for arg in "$@"; do
         args+=("$arg")
     fi
 done
-export HF_HUB_OFFLINE=1   # use the downloaded Whisper model; never contact Hugging Face
+# Use the downloaded Whisper model; never contact Hugging Face. To download a
+# new model once, run with HF_HUB_OFFLINE=0 in front (see config.toml [voice]).
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 cd "$JARVIS_DIR" || { echo "Can't find $JARVIS_DIR"; exit 1; }
+
+# GPU Whisper: if CUDA 12's cuBLAS is installed in the venv (uv add nvidia-cublas-cu12),
+# let the speech recognizer find it. Does nothing otherwise.
+for lib in .venv/lib/python3*/site-packages/nvidia/*/lib; do
+    [[ -d "$lib" ]] && export LD_LIBRARY_PATH="$JARVIS_DIR/$lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+done
 uv run jarvis.py "${args[@]}"
 status=$?
 
