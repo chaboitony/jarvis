@@ -344,7 +344,8 @@ def ask_claude(question: str) -> str:
                          "Tony can raise monthly_budget in config.toml.")
     _read_key()  # fail now, before announcing, if the key is missing
 
-    tools.announce("One moment, sir. Asking Claude." if not deep else "One moment, sir. Claude is thinking it over.")
+    sir = tools.PERSONA.get("address", "sir")
+    tools.announce(f"One moment, {sir}. Asking Claude." if not deep else f"One moment, {sir}. Claude is thinking it over.")
     outcome = {}
 
     def work():

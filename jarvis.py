@@ -38,6 +38,7 @@ from pathlib import Path
 
 import ollama
 
+import tools
 from tools import Toolbox
 
 HERE = Path(__file__).resolve().parent
@@ -79,11 +80,13 @@ def log_exchange(speaker, text):
 
 
 def prune_history(config):
-    """Delete history files older than [history] keep_days (default 30)."""
+    """Delete history and action-log files older than [history] keep_days (default 30)."""
+    from tools import ACTIONS_DIR
+
     try:
         keep_days = int(config.get("history", {}).get("keep_days", 30))
         cutoff = datetime.now().timestamp() - keep_days * 86400
-        for f in HISTORY_DIR.glob("*.txt"):
+        for f in [*HISTORY_DIR.glob("*.txt"), *ACTIONS_DIR.glob("*.jsonl")]:
             if f.stat().st_mtime < cutoff:
                 f.unlink()
     except (OSError, ValueError, TypeError):
@@ -91,9 +94,12 @@ def prune_history(config):
 
 
 CORE_PROMPT = """You are J.A.R.V.I.S., the personal assistant of Anthony Rima, who goes by Tony.
-Address him as "Mr. Rima", "Tony" or "sir". He is not Tony Stark; never call him Mr. Stark.
+Address him as "{address}" (now and then "Tony"). He is not Tony Stark; never call him Mr. Stark.
 PROJECT RIMA is his personal engineering program, named after him.
 Today is {now:%A, %B %d, %Y}, and the time is {now:%I:%M %p}.
+
+Manner: calm, polite and precise, like a capable British butler; brief and to the point.
+Phrases like "Right away", "Shall I...?" and "Done" suit you. {humor}
 
 {tool_prompts}
 
@@ -102,6 +108,30 @@ General rules:
 - Requests may come from speech recognition, so expect small transcription mistakes.
 - Reply in one to three short plain sentences with no markdown, because replies may be read aloud.
 - Write the way you would say it: words instead of symbols ("72 degrees", "40 percent"), no lists or parentheses."""
+
+HUMOR_RULES = {
+    "off": "Humor: none. Stay strictly professional.",
+    "slight": ("Humor: slight. Dry, understated wit, as in the films: at most one light remark in a reply, "
+               "only when it fits naturally, after the answer, and never instead of information."),
+    "more": ("Humor: more. Dry, playful wit, as in the films: at most one remark in a reply, after the answer, "
+             "and never instead of information."),
+}
+NO_HUMOR = (" Never joke in errors, warnings, alerts, confirmations, countdowns, or anything about "
+            "deleting, editing files or running commands; those stay plain.")
+
+
+def greeting(address="sir", now=None):
+    """Time-of-day greeting for startup: "Good evening, sir." """
+    hour = (now or datetime.now()).hour
+    if 5 <= hour < 12:
+        part = "Good morning"
+    elif 12 <= hour < 17:
+        part = "Good afternoon"
+    elif 17 <= hour < 22:
+        part = "Good evening"
+    else:
+        return f"Working late, {address}."
+    return f"{part}, {address}."
 
 
 # --------------------------------------------------------------------------
@@ -198,6 +228,10 @@ class Brain:
         self.routing = bool(brain.get("routing", True))
         self.routing_plugins = max(1, int(brain.get("routing_plugins", 3)))
         self.embed_model = brain.get("embed_model", "nomic-embed-text")
+        personality = config.get("personality", {})
+        humor = str(personality.get("humor", "slight")).lower()
+        tools.PERSONA.update(address=str(personality.get("address", "sir")).strip() or "sir",
+                             humor=humor if humor in tools.HUMOR_LEVELS else "slight")
         self.toolbox.load(config)
         self.last_plugins = [p for p in self.last_plugins if p in self.toolbox.groups]
 
@@ -211,7 +245,11 @@ class Brain:
         return "Tools reloaded:\n" + self.toolbox.summary()
 
     def _system_message(self, plugins):
-        text = CORE_PROMPT.format(now=datetime.now(), tool_prompts=self.toolbox.prompt_for(plugins))
+        humor = HUMOR_RULES.get(tools.PERSONA["humor"], HUMOR_RULES["slight"])
+        if tools.PERSONA["humor"] != "off":
+            humor += NO_HUMOR
+        text = CORE_PROMPT.format(now=datetime.now(), tool_prompts=self.toolbox.prompt_for(plugins),
+                                  address=tools.PERSONA["address"], humor=humor)
         return {"role": "system", "content": text}
 
     def _embed(self, texts):
@@ -505,7 +543,8 @@ def _voice_loop():
           "`systemctl --user stop jarvis-voice` when running as a service.")
     if voice_cfg.get("announce_startup", True):
         set_state("speaking")
-        mouth.say("J.A.R.V.I.S. online.")
+        hello = greeting(tools.PERSONA["address"]) + " " if config.get("personality", {}).get("greeting", True) else ""
+        mouth.say(hello + "J.A.R.V.I.S. online.")
         set_state("ready")
 
     try:

@@ -70,19 +70,69 @@ Rules for tool functions:
 """
 import importlib
 import inspect
+import json
 import math
+import os
 import pkgutil
 import re
 import subprocess
 import sys
 import traceback
 import typing
+from datetime import datetime
+from pathlib import Path
 
 MAX_RESULT_CHARS = 4000  # keeps one tool result from filling the model's context window
+
+# Action log (F-32): every tool call, one JSON line each, one file per day.
+# Read back by tools/actions.py ("what did you do today?"); old days are deleted
+# with the conversation history (see prune_history in jarvis.py).
+ACTIONS_DIR = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "jarvis" / "actions"
+NOT_LOGGED = {"recent_actions"}  # asking what was done isn't itself an action
+
+
+def _short_value(value, limit=300):
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def log_action(tool, args, outcome, result, entry=None):
+    """Append one tool call to today's action log. Never raises: the log must not stop J.A.R.V.I.S."""
+    if tool in NOT_LOGGED:
+        return
+    try:
+        now = datetime.now()
+        record = {
+            "time": now.isoformat(timespec="seconds"),
+            "turn": _REQUEST["turn"],
+            "request": _short_value(_REQUEST["text"], 200),
+            "tool": tool,
+            "group": (entry or {}).get("group"),
+            "writes": bool((entry or {}).get("writes")),
+            "args": {k: _short_value(v) for k, v in (args if isinstance(args, dict) else {}).items()},
+            "outcome": outcome,               # ok, error, blocked, unknown
+            "result": _short_value(result, 200),
+        }
+        ACTIONS_DIR.mkdir(parents=True, exist_ok=True)
+        os.chmod(ACTIONS_DIR, 0o700)
+        path = ACTIONS_DIR / f"{now:%Y-%m-%d}.jsonl"
+        new = not path.exists()
+        with path.open("a") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        if new:
+            os.chmod(path, 0o600)
+    except Exception:
+        pass
 
 # The plugin modules currently loaded, in config.toml order: name -> module.
 # Plugins that combine others (like briefing) read this.
 LOADED = {}
+
+# J.A.R.V.I.S.'s manner (F-27). jarvis.py fills it from [personality] in config.toml;
+# tools/personality.py can change the humor level by voice until the next restart.
+PERSONA = {"address": "sir", "humor": "slight"}
+HUMOR_LEVELS = ("off", "slight", "more")
 
 # The request being answered right now (set by Toolbox.start_turn)
 _REQUEST = {"text": "", "turn": 0, "cancel": None, "announce": None}
@@ -431,17 +481,26 @@ class Toolbox:
         _REQUEST.update(text=str(text or ""), turn=_REQUEST["turn"] + 1, cancel=cancel, announce=announce)
 
     def call(self, name, arguments):
-        """Run one tool call from the model and always return text it can read."""
+        """Run one tool call from the model and always return text it can read. Every call is logged."""
         entry = self.entries.get(name)
         if entry is None:
-            return f"Error: there is no tool named '{name}'."
+            text = f"Error: there is no tool named '{name}'."
+            log_action(name, arguments, "unknown", text)
+            return text
         if entry["writes"] and self._tainted:
-            return ("Error: blocked. This request already used outside information, so tools that "
+            text = ("Error: blocked. This request already used outside information, so tools that "
                     "change things are switched off until Tony makes a new request. Tell him what you "
                     "would change and let him confirm.")
+            log_action(name, arguments, "blocked", text, entry)
+            return text
         if entry["untrusted"]:
             self._tainted = True  # set before running, so even an error message counts
+        text = self._run(name, entry, arguments)
+        log_action(name, arguments, "error" if text.startswith("Error:") else "ok", text, entry)
+        return text
 
+    def _run(self, name, entry, arguments):
+        """Run the tool function, turning every kind of failure into an 'Error: ...' sentence."""
         try:
             result = entry["func"](**(arguments if isinstance(arguments, dict) else {}))
         except TypeError as e:

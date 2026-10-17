@@ -11,10 +11,15 @@ unless a setting below says otherwise.
 | `jarvis --mic-test` | Check the microphone and speech recognition; nothing goes to the model |
 | `jarvis --voice-test` | Hear the voice options (`--voices "a|b"`, `--speed 1.1`) |
 | `jarvis-update` | Install downloaded J.A.R.V.I.S. files from ~/Downloads |
+| `jarvis-stage` | Opened by J.A.R.V.I.S. (not by you): a terminal with a prepared command typed in but not run. Enter runs it, Ctrl+C cancels |
 | `uv run python -m tools.ask_claude test` | Check the Claude API key and connection (costs a fraction of a cent); `usage` shows this month's spend |
 
 Talk key: `$mod+t` or left-click the Polybar icon. Press it again while
 J.A.R.V.I.S. is thinking or speaking to interrupt.
+
+J.A.R.V.I.S. never runs shell commands himself: he prepares them in a terminal
+(`stage_command`) and you press Enter. Every tool call is written to an action
+log ("what did you do today?"). His manner and humor are set under `[personality]`.
 
 Settings: `config.toml`. Tools: `tools/` (see `tools/__init__.py`). Outside tool
 servers (MCP): `tools/mcp.py` and `[tools.mcp.servers.*]` in `config.toml`.
@@ -46,5 +51,5 @@ Each integration records what it is, its version, why it was chosen and how to r
 ## Not in git
 
 `.venv/`, `voices/`, `.backups/`, history (`~/.local/state/jarvis/history/`),
-API keys and credentials (`~/.config/rima/`), Claude's saved answers (`~/.local/share/jarvis/claude/`),
+the action log (`~/.local/state/jarvis/actions/`, pruned with the history), API keys and credentials (`~/.config/rima/`), Claude's saved answers (`~/.local/share/jarvis/claude/`),
 Claude spend tracking (`~/.local/state/jarvis/claude-usage.json`), the last recording (`$XDG_RUNTIME_DIR/jarvis-last.wav`).

@@ -68,6 +68,13 @@ kokoro_voices = "voices/voices-v1.0.bin"
 kokoro_voice = "bm_lewis"
 voice_file = "voices/en_GB-alan-medium.onnx"   # Piper voice, relative to ~/rima/jarvis
 
+[personality]
+# How J.A.R.V.I.S. talks (F-27). Changes need a restart (or "reload").
+address = "sir"     # what he calls you most: "sir", "Tony" or "Mr. Rima"
+humor = "slight"    # "off", "slight" or "more". Say "humor off" or "less jokes" to change it until restart.
+                    # Never any humor in errors, warnings, confirmations, countdowns or commands.
+greeting = true     # "Good evening, sir. J.A.R.V.I.S. online." at startup (needs announce_startup)
+
 [notifications]
 seconds = 15            # how long a reply stays on screen
 text_size = "large"     # small, medium, large, x-large or xx-large
@@ -80,7 +87,8 @@ keep_days = 30          # conversations are deleted after this many days
 # Plugin files in tools/ to load, by file name without ".py".
 # Routing ([brain] above) keeps the list the model sees short, so many plugins
 # are fine. The order here is also the order of the welcome briefing sections.
-enabled = ["weather", "tasks", "timers", "desktop", "calc", "system", "mcp", "ask_claude", "briefing"]
+enabled = ["weather", "tasks", "timers", "desktop", "calc", "system", "mcp", "ask_claude",
+           "staged", "actions", "personality", "briefing"]
 
 # Settings for one plugin go in a [tools.<file name>] section.
 
@@ -107,6 +115,13 @@ geany = "geany"
 libreoffice = "libreoffice"
 filelight = "filelight"
 "sound settings" = "pavucontrol"
+
+# ---- Staged commands (tools/staged.py, bin/jarvis-stage) ----
+# J.A.R.V.I.S. never runs shell commands himself. He opens a terminal with the command
+# typed in; you press Enter to run it, or Ctrl+C to cancel. Commands that delete or
+# overwrite data (rm, dd, mkfs, git reset --hard, package removal, curl | sh...) are refused.
+[tools.staged]
+terminal = ["konsole", "--hide-menubar", "-e"]   # the terminal and its "run this" flag
 
 # ---- Claude (tools/ask_claude.py) ----
 # Sends a question to Claude (Anthropic's API) ONLY when you say "Claude" in the

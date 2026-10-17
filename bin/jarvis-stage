@@ -1,0 +1,61 @@
+#!/bin/bash
+# jarvis-install: bin
+# jarvis-stage  |  PROJECT RIMA, RIMA-01
+# Shows a command J.A.R.V.I.S. prepared, already typed but NOT run (F-33).
+#   Enter   runs it (edit it first if you like; arrow keys work)
+#   Ctrl+C  cancels and closes the window
+# Opened in Konsole by tools/staged.py; the command arrives in a private file
+# in $XDG_RUNTIME_DIR/jarvis-stage/, which is deleted as soon as it's read.
+set -u
+
+RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/jarvis-stage"
+file="${1:-}"
+
+fail() {
+    printf '%s\n' "jarvis-stage: $1"
+    read -rp "Press Enter to close. "
+    exit 1
+}
+
+# Only accept a private file that J.A.R.V.I.S. wrote into its own folder
+case "$file" in
+    "$RUN_DIR"/*.cmd) ;;
+    *) fail "that isn't a staged command file." ;;
+esac
+[[ -f "$file" && -O "$file" ]] || fail "the staged command is gone (it can only be opened once)."
+[[ "$(stat -c %a -- "$file")" == 600 ]] || fail "the staged command file isn't private; refusing it."
+
+# Line 1: what it does. Line 2: the command.
+mapfile -t lines < "$file"
+rm -f -- "$file"
+explanation="${lines[0]:-}"
+command="${lines[1]:-}"
+[[ -n "$command" ]] || fail "the staged command is empty."
+
+printf '\e]0;J.A.R.V.I.S. staged command\a'          # window title
+printf '\e[1;36mJ.A.R.V.I.S.\e[0m prepared this command. \e[1mIt has not run.\e[0m\n\n'
+[[ -n "$explanation" ]] && printf '  %s\n\n' "$explanation"
+if [[ "$command" == *sudo* ]]; then
+    printf '  \e[33mIt uses sudo, so it will ask for your password.\e[0m\n\n'
+fi
+printf 'Press \e[1mEnter\e[0m to run it (edit it first if you like), or \e[1mCtrl+C\e[0m to cancel.\n\n'
+
+# read -e: full line editing; -i: pre-filled text. Ctrl+C ends the script (= cancel),
+# Ctrl+D (end of input) cancels too.
+if ! IFS= read -r -e -i "$command" -p "$ " line; then
+    echo
+    exit 0
+fi
+[[ -z "${line// }" ]] && exit 0
+
+history -s -- "$line" 2>/dev/null
+bash -c "$line"
+status=$?
+echo
+if (( status == 0 )); then
+    printf '\e[32mFinished.\e[0m '
+else
+    printf '\e[31mExited with status %d.\e[0m ' "$status"
+fi
+printf 'This window stays open as a normal terminal; type exit to close it.\n'
+exec bash -i
