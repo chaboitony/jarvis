@@ -41,7 +41,7 @@ whisper_model = "distil-large-v3.5"
 whisper_device = "cuda"
 # Names Whisper should expect. Keep it SHORT: each word here makes Whisper more
 # likely to "hear" it, which is how a long list causes mixed-up words.
-hotwords = "J.A.R.V.I.S., Taskwarrior, Obsidian, Ollama"
+hotwords = "J.A.R.V.I.S., Claude, Taskwarrior, Obsidian, Ollama"
 # Which microphone: "" = the system default (normally the same one Discord uses).
 # Otherwise part of its name, as listed by `jarvis --mic-test`.
 input_device = ""
@@ -80,7 +80,7 @@ keep_days = 30          # conversations are deleted after this many days
 # Plugin files in tools/ to load, by file name without ".py".
 # Routing ([brain] above) keeps the list the model sees short, so many plugins
 # are fine. The order here is also the order of the welcome briefing sections.
-enabled = ["weather", "tasks", "timers", "desktop", "calc", "system", "mcp", "briefing"]
+enabled = ["weather", "tasks", "timers", "desktop", "calc", "system", "mcp", "ask_claude", "briefing"]
 
 # Settings for one plugin go in a [tools.<file name>] section.
 
@@ -107,6 +107,28 @@ geany = "geany"
 libreoffice = "libreoffice"
 filelight = "filelight"
 "sound settings" = "pavucontrol"
+
+# ---- Claude (tools/ask_claude.py) ----
+# Sends a question to Claude (Anthropic's API) ONLY when you say "Claude" in the
+# request, or say yes after J.A.R.V.I.S. offers. Only the question goes out (plus
+# about_me), never the conversation, tasks or notes. Claude can search the web and
+# run code in Anthropic's sandbox. The full answer is saved to save_dir; say
+# "show Claude's answer" to open it.
+# The key goes in key_file (mode 600), never in this repo. Check the setup with:
+#   cd ~/rima/jarvis && uv run python -m tools.ask_claude test
+[tools.ask_claude]
+model = "claude-haiku-5-5"        # normal questions ($0.10 in / $0.50 out per million tokens)
+deep_model = "claude-sonnet-5-5"  # when you say "think hard", "in depth" or "write code" ($2 / $10)
+monthly_budget = 10.0             # dollars; J.A.R.V.I.S. stops asking at this. Keep the Console limit too.
+web_search = true                 # Claude may search the web ($10 per 1,000 searches)
+max_searches = 3                  # per question
+code_execution = true             # Claude may run code in Anthropic's sandbox (never on this PC)
+max_tokens = 2000                 # answer length limit (deep: deep_max_tokens)
+deep_max_tokens = 8000
+timeout = 120                     # seconds
+about_me = "The question comes from Tony, a Mechanical and Electrical Engineering student at Kansas State University who uses Arch Linux."
+key_file = "~/.config/rima/anthropic-key"
+save_dir = "~/.local/share/jarvis/claude"
 
 # ---- MCP tool servers (tools/mcp.py) ----
 # MCP servers are small programs that offer ready-made tools. Each one is

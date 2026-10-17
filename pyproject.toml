@@ -6,6 +6,7 @@ description = "J.A.R.V.I.S., the local voice assistant of PROJECT RIMA (RIMA-01)
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "anthropic>=1.15.0",
     "faster-whisper>=1.2.1",
     "kokoro-onnx>=0.6.1",
     "mcp>=2.3.0",

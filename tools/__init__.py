@@ -53,6 +53,15 @@ the MCP bridge adds one group per server (e.g. "mcp:git"). Each group is
 described for routing by its name, PROMPT, tool descriptions and EXAMPLES, so
 good EXAMPLES matter.
 
+What a tool can know about the request it's running in:
+    from tools import current_request, current_turn, cancel_requested, announce
+    current_request()   Tony's words for this request ("" if unknown)
+    current_turn()      a number that goes up by one each request (for "confirm in a
+                        later request" rules)
+    cancel_requested()  True once Tony pressed the talk key to interrupt; slow
+                        tools should check it and stop
+    announce(text)      say something now, before the tool finishes ("One moment.")
+
 Rules for tool functions:
   * Return plain text (or something that turns into text).
   * Raise ValueError with a plain sentence when something is wrong; the model
@@ -74,6 +83,35 @@ MAX_RESULT_CHARS = 4000  # keeps one tool result from filling the model's contex
 # The plugin modules currently loaded, in config.toml order: name -> module.
 # Plugins that combine others (like briefing) read this.
 LOADED = {}
+
+# The request being answered right now (set by Toolbox.start_turn)
+_REQUEST = {"text": "", "turn": 0, "cancel": None, "announce": None}
+
+
+def current_request():
+    """Tony's words for the current request."""
+    return _REQUEST["text"]
+
+
+def current_turn():
+    """Counts requests: 1, 2, 3... A confirmation must come in a later turn than the proposal."""
+    return _REQUEST["turn"]
+
+
+def cancel_requested():
+    """True if Tony interrupted (pressed the talk key) during this request."""
+    cancel = _REQUEST["cancel"]
+    return bool(cancel is not None and cancel.is_set())
+
+
+def announce(text):
+    """Say (voice) or print (typed) a short line now, e.g. before a slow tool call."""
+    callback = _REQUEST["announce"]
+    if callback and text:
+        try:
+            callback(str(text))
+        except Exception:
+            traceback.print_exc()
 
 _JSON_TYPES = {str: "string", int: "integer", float: "number", bool: "boolean",
                list: "array", dict: "object"}
@@ -383,9 +421,14 @@ class Toolbox:
         return "\n".join(lines) or "  (no tools loaded)"
 
     # ---- running a tool --------------------------------------------------
-    def start_turn(self):
-        """Call at the start of each request. Clears the untrusted-text flag."""
+    def start_turn(self, text="", cancel=None, announce=None):
+        """
+        Call at the start of each request. Clears the untrusted-text flag and
+        records the request for current_request() / current_turn() /
+        cancel_requested() / announce().
+        """
         self._tainted = False
+        _REQUEST.update(text=str(text or ""), turn=_REQUEST["turn"] + 1, cancel=cancel, announce=announce)
 
     def call(self, name, arguments):
         """Run one tool call from the model and always return text it can read."""

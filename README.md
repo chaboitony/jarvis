@@ -11,6 +11,7 @@ unless a setting below says otherwise.
 | `jarvis --mic-test` | Check the microphone and speech recognition; nothing goes to the model |
 | `jarvis --voice-test` | Hear the voice options (`--voices "a|b"`, `--speed 1.1`) |
 | `jarvis-update` | Install downloaded J.A.R.V.I.S. files from ~/Downloads |
+| `uv run python -m tools.ask_claude test` | Check the Claude API key and connection (costs a fraction of a cent); `usage` shows this month's spend |
 
 Talk key: `$mod+t` or left-click the Polybar icon. Press it again while
 J.A.R.V.I.S. is thinking or speaking to interrupt.
@@ -39,9 +40,11 @@ Each integration records what it is, its version, why it was chosen and how to r
 | mcp (PyPI, MIT; official MCP Python SDK) | >=2.3.0 (uv.lock) | Lets J.A.R.V.I.S. use tools from MCP servers (`tools/mcp.py`) | `uv remove mcp`, take `"mcp"` out of `[tools] enabled` |
 | mcp-server-git (PyPI, MIT; official reference server) | 2026.10.10, installed with `uv tool install` | Read-only git tools for repos in ~/rima (status, log, diffs, show, branches) | `uv tool uninstall mcp-server-git`, delete `[tools.mcp.servers.git]` |
 | mcp-server-fetch (PyPI, MIT; official reference server) | 2026.10.10, installed with `uv tool install` | Reads public web pages as text (refuses local/private addresses; respects robots.txt) | `uv tool uninstall mcp-server-fetch`, delete `[tools.mcp.servers.fetch]` |
+| anthropic (PyPI, MIT; official Claude SDK) | >=1.15.0 (uv.lock) | `ask_claude`: questions to Claude only when Tony says "Claude" or agrees; web search and sandbox code run at Anthropic. Key in `~/.config/rima/anthropic-key` (600), local monthly budget + Console spend limit | `uv remove anthropic`, take `"ask_claude"` out of `[tools] enabled`, delete the key file |
 | nvidia-cublas-cu12 (PyPI) | 12.9 (uv.lock), installed 2026-10-16 | CUDA 12 math library so Whisper can run on the GPU; CTranslate2 4.8 needs CUDA 12, not Arch's CUDA 13 | `uv remove nvidia-cublas-cu12`, set `whisper_device = "cpu"` |
 
 ## Not in git
 
 `.venv/`, `voices/`, `.backups/`, history (`~/.local/state/jarvis/history/`),
-Google credentials (`~/.config/rima/`), the last recording (`$XDG_RUNTIME_DIR/jarvis-last.wav`).
+API keys and credentials (`~/.config/rima/`), Claude's saved answers (`~/.local/share/jarvis/claude/`),
+Claude spend tracking (`~/.local/state/jarvis/claude-usage.json`), the last recording (`$XDG_RUNTIME_DIR/jarvis-last.wav`).

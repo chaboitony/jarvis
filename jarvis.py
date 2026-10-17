@@ -259,9 +259,15 @@ class Brain:
         self.messages[0] = self._system_message(plugins)
         start = len(self.messages)
         self.messages.append({"role": "user", "content": text})
-        self.toolbox.start_turn()
         self.interrupted, self.last_tools = False, []
         sentences = SentenceSplitter(on_sentence)
+
+        def announce(line):  # a tool says something before it finishes ("One moment, sir.")
+            sentences.say(line)
+            if on_text:
+                on_text(line + " ")
+
+        self.toolbox.start_turn(text, cancel, announce)
         try:
             reply, used = self._run_turn(self.toolbox.schemas_for(plugins), on_text, sentences, cancel)
         except BaseException:  # an error, or Ctrl+C in typed mode
