@@ -202,6 +202,7 @@ done
 needs_restart=false
 for f in "${installed[@]}"; do
     case "$f" in
+        tools/__init__.py) needs_restart=true ;;    # the toolbox itself: a reload can't swap it
         tools/*|./config.toml|bin/*|polybar/*) ;;   # picked up without a restart
         *) needs_restart=true ;;
     esac

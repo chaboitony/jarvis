@@ -88,7 +88,7 @@ keep_days = 30          # conversations are deleted after this many days
 # Routing ([brain] above) keeps the list the model sees short, so many plugins
 # are fine. The order here is also the order of the welcome briefing sections.
 enabled = ["weather", "tasks", "timers", "desktop", "calc", "system", "mcp", "ask_claude",
-           "staged", "actions", "personality", "briefing"]
+           "staged", "actions", "personality", "power", "briefing"]
 
 # Settings for one plugin go in a [tools.<file name>] section.
 
@@ -122,6 +122,23 @@ filelight = "filelight"
 # overwrite data (rm, dd, mkfs, git reset --hard, package removal, curl | sh...) are refused.
 [tools.staged]
 terminal = ["konsole", "--hide-menubar", "-e"]   # the terminal and its "run this" flag
+
+# ---- Power and session (tools/power.py) ----
+# Lock and suspend happen at once (suspend after a short countdown). Log out, reboot
+# and shut down close every app, so J.A.R.V.I.S. first lists what's open and waits for
+# your "yes" in the next request, then counts down; the talk key cancels.
+# "Reboot into Windows" opens a terminal with `sudo efibootmgr --bootnext <entry> &&
+# systemctl reboot` typed in (Windows for the next boot only; GRUB is untouched).
+# Locking needs a screen locker. One-time setup:
+#   sudo pacman -S i3lock
+#   cp ~/.config/i3/config ~/.config/i3/config.bak-$(date +%F)
+#   then in ~/.config/i3/config change the commented xss-lock line to:
+#     exec --no-startup-id xss-lock --transfer-sleep-lock -- i3lock --nofork -c 000000
+#   and log out and back in (xss-lock also locks the screen before every suspend).
+[tools.power]
+countdown = 10                        # seconds before log out / reboot / shut down
+suspend_countdown = 3                 # lets J.A.R.V.I.S. finish speaking first
+windows_entry = "Windows Boot Manager"   # label shown by `efibootmgr`
 
 # ---- Claude (tools/ask_claude.py) ----
 # Sends a question to Claude (Anthropic's API) ONLY when you say "Claude" in the

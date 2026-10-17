@@ -154,6 +154,16 @@ def cancel_requested():
     return bool(cancel is not None and cancel.is_set())
 
 
+_YES = re.compile(r"^(yes|yeah|yep|yup|sure|ok|okay|please|go ahead|do it|do that|confirm(ed)?|affirmative|"
+                  r"absolutely|definitely|proceed|go for it|that's right|correct)\b", re.I)
+
+
+def is_yes(text=None):
+    """True if Tony's words (default: the current request) start with a clear yes. For two-step confirmations."""
+    words = (current_request() if text is None else str(text)).strip().lower().lstrip("\"'")
+    return bool(_YES.match(words))
+
+
 def announce(text):
     """Say (voice) or print (typed) a short line now, e.g. before a slow tool call."""
     callback = _REQUEST["announce"]

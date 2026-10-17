@@ -19,7 +19,9 @@ J.A.R.V.I.S. is thinking or speaking to interrupt.
 
 J.A.R.V.I.S. never runs shell commands himself: he prepares them in a terminal
 (`stage_command`) and you press Enter. Every tool call is written to an action
-log ("what did you do today?"). His manner and humor are set under `[personality]`.
+log ("what did you do today?"). His manner and humor are set under `[personality]`. Power actions that close apps
+(log out, reboot, shut down) need your "yes" in a second request plus a countdown
+the talk key cancels; "reboot into Windows" is a staged command (next boot only).
 
 Settings: `config.toml`. Tools: `tools/` (see `tools/__init__.py`). Outside tool
 servers (MCP): `tools/mcp.py` and `[tools.mcp.servers.*]` in `config.toml`.
